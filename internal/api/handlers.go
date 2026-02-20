@@ -214,9 +214,9 @@ func (s *Services) handleGetTrace(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	trace, err := s.Graph.GetTrace(id)
-	if err != nil {
+	if err != nil || trace == nil {
 		trace, err = s.Graph.GetTraceByShortID(id)
-		if err != nil {
+		if err != nil || trace == nil {
 			writeError(w, http.StatusNotFound, "not_found", "trace not found")
 			return
 		}
@@ -247,9 +247,9 @@ func (s *Services) handleGetTraceContext(w http.ResponseWriter, r *http.Request)
 	id := chi.URLParam(r, "id")
 
 	trace, err := s.Graph.GetTrace(id)
-	if err != nil {
+	if err != nil || trace == nil {
 		trace, err = s.Graph.GetTraceByShortID(id)
-		if err != nil {
+		if err != nil || trace == nil {
 			writeError(w, http.StatusNotFound, "not_found", "trace not found")
 			return
 		}
@@ -276,9 +276,9 @@ func (s *Services) handleGetTraceContext(w http.ResponseWriter, r *http.Request)
 func (s *Services) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	ep, err := s.Graph.GetEpisode(id)
-	if err != nil {
+	if err != nil || ep == nil {
 		ep, err = s.Graph.GetEpisodeByShortID(id)
-		if err != nil {
+		if err != nil || ep == nil {
 			writeError(w, http.StatusNotFound, "not_found", "episode not found")
 			return
 		}
