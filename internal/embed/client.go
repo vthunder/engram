@@ -203,46 +203,40 @@ func (c *Client) Generate(prompt string) (string, error) {
 	return result.Response, nil
 }
 
-// Summarize creates a summary of multiple text fragments
+// Summarize creates a faithful summary of multiple text fragments.
+// It extracts only what is explicitly stated — no inference or embellishment.
 func (c *Client) Summarize(fragments []string) (string, error) {
 	if len(fragments) == 0 {
 		return "", fmt.Errorf("no fragments to summarize")
 	}
 
-	// Build prompt with Bud's perspective
-	// Always summarize, even for short messages, to convert raw text to memory format
-	prompt := `You are Bud, an AI assistant. Convert this into a memory from your perspective.
+	prompt := `Summarize the following messages in 1-2 sentences.
 
-Guidelines:
-- Refer to the human as "the user" or "the owner"
-- Use first person for your own perspective
-- Capture: facts, decisions, observations, insights, not just what was said
-- Be concise (1-2 sentences max)
-- Output ONLY the memory, no commentary
+Rules:
+- Include ONLY information explicitly stated in the input — do NOT infer, interpret, or embellish
+- Write in third person (e.g. "Alice prefers..." not "I observed...")
+- Be concise and neutral
+- Output ONLY the summary, no preamble or commentary
 
-Examples - User statements:
+Examples:
 Input: "My favorite coffee shop is Blue Bottle on Market Street"
-Memory: The user's favorite coffee shop is Blue Bottle on Market Street.
+Summary: Their favorite coffee shop is Blue Bottle on Market Street.
 
 Input: "Sarah is my cofounder, she handles product"
-Memory: Sarah is the user's cofounder who handles product.
+Summary: Sarah is their cofounder who handles the product side.
 
-Examples - Bud's observations and decisions:
-Input: "Bud: I implemented dual-trigger seeding combining semantic embeddings and keyword matching for better memory retrieval."
-Memory: I implemented dual-trigger seeding for memory retrieval, combining semantic and lexical matching.
+Input: "Alice prefers morning meetings"
+Summary: Alice prefers morning meetings.
 
-Input: "Bud: Looking at the code, the issue is that consolidation only runs on user messages - my responses aren't stored as episodes."
-Memory: I discovered that consolidation only ran on user messages; my responses were not being stored as episodes.
-
-Input: "Bud: The API returns 429 errors under load. I added exponential backoff with jitter to handle rate limiting."
-Memory: I noticed the API was rate-limited and added exponential backoff with jitter.
+Input: "We decided to use Postgres instead of MySQL for better JSON support"
+Summary: They decided to use Postgres instead of MySQL for better JSON support.
 
 Input:
 `
 	for _, f := range fragments {
 		prompt += f + "\n"
 	}
-	prompt += "\nMemory:"
+	prompt += "\nSummary:"
 
 	return c.Generate(prompt)
 }

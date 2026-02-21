@@ -274,6 +274,7 @@ List consolidated engrams. Returns `[{id, summary}]` by default.
 Query params:
 - `query` — semantic search (spreading activation); returns ranked results
 - `detail=full` — return all fields
+- `level` — pyramid summary compression applied to every returned engram (same semantics as the single-item endpoint; default 0 = verbatim)
 - `limit` — max results when using `?query=` (default 10)
 - `threshold` — filter by minimum activation level (list-all mode)
 
@@ -343,6 +344,7 @@ List extracted named entities. Returns `[{id, name}]` by default.
 Query params:
 - `query` — text search over entity names and aliases
 - `detail=full` — return all fields
+- `level` — pyramid summary compression applied to every returned entity (same semantics as the single-item endpoint; default 0 = verbatim)
 - `type` — filter by entity type (see entity types below)
 - `limit` — max results (default 100; default 10 when using `?query=`)
 

@@ -44,6 +44,58 @@ func parseDetail(r *http.Request) bool {
 	return r.URL.Query().Get("detail") == "full"
 }
 
+// applyEngramLevels replaces each engram's Summary with the pyramid summary at the
+// requested level (batch query). A no-op when level == 0.
+func applyEngramLevels(g *graph.DB, engrams []*graph.Engram, level int) {
+	if level == 0 || len(engrams) == 0 {
+		return
+	}
+	ids := make([]string, len(engrams))
+	for i, e := range engrams {
+		ids[i] = e.ID
+	}
+	summaries, err := g.GetEngramSummariesBatch(ids, level)
+	if err != nil {
+		return
+	}
+	for _, e := range engrams {
+		if s, ok := summaries[e.ID]; ok {
+			e.Summary = s.Summary
+		}
+	}
+}
+
+// applyEntityLevels replaces each entity's Summary with the pyramid summary at the
+// requested level (batch query). A no-op when level == 0.
+func applyEntityLevels(g *graph.DB, entities []*graph.Entity, level int) {
+	if level == 0 || len(entities) == 0 {
+		return
+	}
+	ids := make([]string, len(entities))
+	for i, e := range entities {
+		ids[i] = e.ID
+	}
+	summaries, err := g.GetEntitySummariesBatch(ids, level)
+	if err != nil {
+		return
+	}
+	for _, e := range entities {
+		if s, ok := summaries[e.ID]; ok {
+			e.Summary = s.Summary
+		}
+	}
+}
+
+// parseLevel parses ?level= (0 = verbatim/default).
+func parseLevel(r *http.Request) int {
+	if lv := r.URL.Query().Get("level"); lv != "" {
+		if n, err := strconv.Atoi(lv); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 0
+}
+
 // parseLimit parses ?limit= with a given default.
 func parseLimit(r *http.Request, def int) int {
 	if lv := r.URL.Query().Get("limit"); lv != "" {
@@ -195,6 +247,7 @@ func (s *Services) handleConsolidate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 	full := parseDetail(r)
+	level := parseLevel(r)
 	queryStr := r.URL.Query().Get("query")
 
 	// Semantic search path
@@ -213,6 +266,7 @@ func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "retrieval_error", err.Error())
 			return
 		}
+		applyEngramLevels(s.Graph, result.Engrams, level)
 		if full {
 			for _, e := range result.Engrams {
 				e.Embedding = nil
@@ -242,6 +296,7 @@ func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}
+		applyEngramLevels(s.Graph, engrams, level)
 		writeEngramList(w, engrams, full)
 		return
 	}
@@ -252,6 +307,7 @@ func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
+	applyEngramLevels(s.Graph, engrams, level)
 	writeEngramList(w, engrams, full)
 }
 
@@ -288,13 +344,7 @@ func (s *Services) handleGetEngram(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	level := 0
-	if lv := r.URL.Query().Get("level"); lv != "" {
-		if n, err2 := strconv.Atoi(lv); err2 == nil {
-			level = n
-		}
-	}
-	if level > 0 {
+	if level := parseLevel(r); level > 0 {
 		if summary, err2 := s.Graph.GetEngramSummary(engram.ID, level); err2 == nil && summary != nil {
 			engram.Summary = summary.Summary
 		}
@@ -487,6 +537,7 @@ func (s *Services) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Services) handleListEntities(w http.ResponseWriter, r *http.Request) {
 	full := parseDetail(r)
+	level := parseLevel(r)
 	queryStr := r.URL.Query().Get("query")
 	limit := parseLimit(r, 100)
 
@@ -497,6 +548,7 @@ func (s *Services) handleListEntities(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}
+		applyEntityLevels(s.Graph, entities, level)
 		writeEntityList(w, entities, full)
 		return
 	}
@@ -513,6 +565,7 @@ func (s *Services) handleListEntities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
+	applyEntityLevels(s.Graph, entities, level)
 	writeEntityList(w, entities, full)
 }
 
@@ -540,13 +593,7 @@ func (s *Services) handleGetEntity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	level := 0
-	if lv := r.URL.Query().Get("level"); lv != "" {
-		if n, err2 := strconv.Atoi(lv); err2 == nil {
-			level = n
-		}
-	}
-	if level > 0 {
+	if level := parseLevel(r); level > 0 {
 		if summary, err2 := s.Graph.GetEntitySummary(entity.ID, level); err2 == nil && summary != nil {
 			entity.Summary = summary.Summary
 		}

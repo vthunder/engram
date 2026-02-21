@@ -335,6 +335,90 @@ func (g *DB) GetEngramSummary(engramID string, level int) (*EngramSummary, error
 	return nil, nil
 }
 
+// GetEngramSummariesBatch retrieves summaries for multiple engrams at the nearest available
+// level >= target. Returns a map of engram_id -> *EngramSummary.
+func (g *DB) GetEngramSummariesBatch(engramIDs []string, level int) (map[string]*EngramSummary, error) {
+	if len(engramIDs) == 0 {
+		return make(map[string]*EngramSummary), nil
+	}
+
+	placeholders := make([]string, len(engramIDs))
+	args := make([]interface{}, 1+len(engramIDs))
+	args[0] = level
+	for i, id := range engramIDs {
+		placeholders[i] = "?"
+		args[i+1] = id
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, engram_id, compression_level, summary, tokens
+		FROM engram_summaries
+		WHERE compression_level >= ? AND engram_id IN (%s)
+		ORDER BY engram_id, compression_level ASC
+	`, strings.Join(placeholders, ","))
+
+	rows, err := g.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]*EngramSummary)
+	for rows.Next() {
+		var s EngramSummary
+		if err := rows.Scan(&s.ID, &s.EngramID, &s.CompressionLevel, &s.Summary, &s.Tokens); err != nil {
+			continue
+		}
+		// Keep only the first (lowest available level) per engram.
+		if _, exists := result[s.EngramID]; !exists {
+			result[s.EngramID] = &s
+		}
+	}
+	return result, nil
+}
+
+// GetEntitySummariesBatch retrieves summaries for multiple entities at the nearest available
+// level >= target. Returns a map of entity_id -> *EntitySummary.
+func (g *DB) GetEntitySummariesBatch(entityIDs []string, level int) (map[string]*EntitySummary, error) {
+	if len(entityIDs) == 0 {
+		return make(map[string]*EntitySummary), nil
+	}
+
+	placeholders := make([]string, len(entityIDs))
+	args := make([]interface{}, 1+len(entityIDs))
+	args[0] = level
+	for i, id := range entityIDs {
+		placeholders[i] = "?"
+		args[i+1] = id
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, entity_id, compression_level, summary, tokens
+		FROM entity_summaries
+		WHERE compression_level >= ? AND entity_id IN (%s)
+		ORDER BY entity_id, compression_level ASC
+	`, strings.Join(placeholders, ","))
+
+	rows, err := g.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]*EntitySummary)
+	for rows.Next() {
+		var s EntitySummary
+		if err := rows.Scan(&s.ID, &s.EntityID, &s.CompressionLevel, &s.Summary, &s.Tokens); err != nil {
+			continue
+		}
+		// Keep only the first (lowest available level) per entity.
+		if _, exists := result[s.EntityID]; !exists {
+			result[s.EntityID] = &s
+		}
+	}
+	return result, nil
+}
+
 // GenerateEngramSummaryLevel generates a single compression level for an engram.
 func (g *DB) GenerateEngramSummaryLevel(engramID string, level int, sourceEpisodes []*Episode, compressor Compressor) error {
 	if compressor == nil || len(sourceEpisodes) == 0 {

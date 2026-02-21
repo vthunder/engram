@@ -470,6 +470,13 @@ paths:
             type: string
             enum: [full]
           description: "Return full fields instead of minimal. Use `detail=full`."
+        - name: level
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+          description: "Summary compression level for all returned engrams: 0 = verbatim (default); N = approx N-word summary"
         - name: limit
           in: query
           schema:
@@ -696,6 +703,13 @@ paths:
             type: string
             enum: [full]
           description: "Return full fields instead of minimal. Use `detail=full`."
+        - name: level
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+          description: "Summary compression level for all returned entities: 0 = verbatim (default); N = approx N-word summary"
         - name: type
           in: query
           schema:
