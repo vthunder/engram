@@ -73,7 +73,7 @@ func doRequestWithKey(t *testing.T, srv *httptest.Server, method, path, body, ke
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if key != "" {
-		req.Header.Set("X-API-Key", key)
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -589,7 +589,7 @@ func TestFullCycle_IngestAndList(t *testing.T) {
 	searchBody := bytes.NewBufferString(`{"query":"architecture","limit":5}`)
 	searchReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/search", searchBody)
 	searchReq.Header.Set("Content-Type", "application/json")
-	searchReq.Header.Set("X-API-Key", testAPIKey)
+	searchReq.Header.Set("Authorization", "Bearer "+testAPIKey)
 	searchResp, _ := http.DefaultClient.Do(searchReq)
 	searchResp.Body.Close()
 
