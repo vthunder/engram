@@ -704,3 +704,62 @@ func TestLinkEpisodesToRelatedEngramsNoEmbedding(t *testing.T) {
 		t.Errorf("Expected 0 links for episode without embedding, got %d", linked)
 	}
 }
+
+// TestBuildEntityContext verifies that buildEntityContext correctly fetches prior engrams
+// linked to the given entities and formats them as a bulleted context block.
+func TestBuildEntityContext(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	c := NewConsolidator(db, &mockLLM{}, nil)
+	now := time.Now()
+
+	// --- Set up: entity + engram linked together ---
+	entity := &graph.Entity{
+		ID:   "entity-alice",
+		Name: "Alice",
+		Type: graph.EntityPerson,
+	}
+	if err := db.AddEntity(entity); err != nil {
+		t.Fatalf("AddEntity: %v", err)
+	}
+
+	engram := &graph.Engram{
+		ID:        "engram-alice-abc123",
+		Summary:   "Alice is the product lead at Acme Corp.",
+		Topic:     "conversation",
+		Activation: 0.5,
+		Strength:  1,
+		CreatedAt: now,
+	}
+	if err := db.AddEngram(engram); err != nil {
+		t.Fatalf("AddEngram: %v", err)
+	}
+	if err := db.LinkEngramToEntity(engram.ID, entity.ID); err != nil {
+		t.Fatalf("LinkEngramToEntity: %v", err)
+	}
+
+	// --- Test 1: empty entityIDs → empty string ---
+	result := c.buildEntityContext([]string{}, "")
+	if result != "" {
+		t.Errorf("Expected empty string for empty entityIDs, got %q", result)
+	}
+
+	// --- Test 2: entity with linked engram → bullet line ---
+	result = c.buildEntityContext([]string{entity.ID}, "")
+	if result == "" {
+		t.Error("Expected non-empty context for entity with linked engram")
+	}
+	if !strings.Contains(result, "Alice is the product lead at Acme Corp.") {
+		t.Errorf("Expected engram summary in context, got %q", result)
+	}
+	if !strings.HasPrefix(result, "- ") {
+		t.Errorf("Expected context to start with bullet '- ', got %q", result)
+	}
+
+	// --- Test 3: excludeEngramID filters out the specified engram ---
+	result = c.buildEntityContext([]string{entity.ID}, engram.ID)
+	if result != "" {
+		t.Errorf("Expected empty context when only engram is excluded, got %q", result)
+	}
+}

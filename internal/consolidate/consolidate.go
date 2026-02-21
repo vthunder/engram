@@ -350,7 +350,10 @@ func (c *Consolidator) reconsolidateEngram(engramID string) error {
 	// Generate new summary
 	var summary string
 	if c.llm != nil {
-		prompt := c.buildConsolidationPrompt(episodePtrs)
+		// Fetch entity context from prior engrams (exclude self during reconsolidation)
+		entityIDs, _ := c.graph.GetEngramEntities(engramID)
+		entityCtx := c.buildEntityContext(entityIDs, engramID)
+		prompt := c.buildConsolidationPrompt(episodePtrs, entityCtx)
 		summary, err = c.llm.Generate(prompt)
 		if err != nil {
 			summary = truncate(strings.Join(fragments, " "), 300)
@@ -411,7 +414,13 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 	var err error
 
 	if c.llm != nil {
-		prompt := c.buildConsolidationPrompt(group.episodes)
+		// Convert entity ID map to slice for context lookup
+		entityIDSlice := make([]string, 0, len(group.entityIDs))
+		for id := range group.entityIDs {
+			entityIDSlice = append(entityIDSlice, id)
+		}
+		entityCtx := c.buildEntityContext(entityIDSlice, "")
+		prompt := c.buildConsolidationPrompt(group.episodes, entityCtx)
 		summary, err = c.llm.Generate(prompt)
 		if err != nil {
 			// Summarization failed, fall back to truncation
@@ -579,9 +588,65 @@ func (c *Consolidator) labelFragment(ep *graph.Episode) string {
 	return ""
 }
 
+// buildEntityContext fetches brief summaries from prior engrams linked to the given
+// entity IDs and formats them as a bulleted context block for the consolidation prompt.
+// excludeEngramID (non-empty during reconsolidation) is filtered from results.
+// Returns "" when no relevant prior context exists.
+func (c *Consolidator) buildEntityContext(entityIDs []string, excludeEngramID string) string {
+	if len(entityIDs) == 0 || c.graph == nil {
+		return ""
+	}
+
+	const capPerEntity = 2
+	const totalCap = 8
+
+	// Fetch prior engram IDs linked to these entities (2 per entity, deduped)
+	engramIDs, err := c.graph.GetEngramsForEntitiesBatch(entityIDs, capPerEntity)
+	if err != nil || len(engramIDs) == 0 {
+		return ""
+	}
+
+	// Filter out the engram being reconsolidated and the _ephemeral sentinel
+	filtered := engramIDs[:0]
+	for _, id := range engramIDs {
+		if id != excludeEngramID && id != "_ephemeral" {
+			filtered = append(filtered, id)
+		}
+	}
+	engramIDs = filtered
+
+	if len(engramIDs) == 0 {
+		return ""
+	}
+	if len(engramIDs) > totalCap {
+		engramIDs = engramIDs[:totalCap]
+	}
+
+	// Fetch engrams — GetEngramsBatch checks L0 (verbatim) first, then pyramid levels,
+	// then falls back to engrams.summary. Works for newly created engrams without pyramids.
+	engrams, err := c.graph.GetEngramsBatch(engramIDs)
+	if err != nil || len(engrams) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	for _, id := range engramIDs {
+		en, ok := engrams[id]
+		if !ok || en.Summary == "" {
+			continue
+		}
+		sb.WriteString("- ")
+		sb.WriteString(en.Summary)
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
 // buildConsolidationPrompt constructs an identity-aware, temporally-framed prompt for
-// generating a memory summary from a group of episodes.
-func (c *Consolidator) buildConsolidationPrompt(episodes []*graph.Episode) string {
+// generating a memory summary from a group of episodes. entityContext is an optional
+// pre-formatted block of prior memory lines (from buildEntityContext); empty = omitted.
+func (c *Consolidator) buildConsolidationPrompt(episodes []*graph.Episode, entityContext string) string {
 	// Find latest timestamp across episodes for temporal anchor
 	var latest time.Time
 	for _, ep := range episodes {
@@ -621,6 +686,13 @@ func (c *Consolidator) buildConsolidationPrompt(episodes []*graph.Episode) strin
 	sb.WriteString("  NEVER generalize a one-time approval into a standing permission.\n")
 	sb.WriteString("- Include ONLY information explicitly stated — do not infer or embellish.\n")
 	sb.WriteString("- Output ONLY the memory text, no preamble.\n\n")
+
+	// Inject prior entity context — only when available (second+ consolidation run)
+	if entityContext != "" {
+		sb.WriteString("Background context from prior memories:\n")
+		sb.WriteString(entityContext)
+		sb.WriteString("\n")
+	}
 
 	timeStr := latest.Format("Jan 2, 2006 at 15:04")
 	sb.WriteString("Fragments (" + timeStr + "):\n")
