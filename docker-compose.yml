@@ -1,0 +1,83 @@
+# Engram memory service — full stack
+#
+# Profiles:
+#   (none)     — engram only (bring your own Ollama/NER/LLM)
+#   ner        — adds spaCy NER sidecar
+#   ollama     — adds local Ollama for embeddings
+#   full       — all of the above
+#
+# Quick start:
+#   docker compose up                          # engram only
+#   docker compose --profile ner up            # + spaCy NER
+#   docker compose --profile ner,ollama up     # + spaCy NER + Ollama
+#
+# Required env vars (or set in engram.yaml):
+#   ENGRAM_SERVER_API_KEY  — API key for REST authentication
+#   ANTHROPIC_API_KEY      — required only when LLM provider is "anthropic"
+
+services:
+  engram:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - engram-data:/data
+    environment:
+      ENGRAM_SERVER_API_KEY: ${ENGRAM_SERVER_API_KEY:-changeme}
+      ENGRAM_STORAGE_PATH: /data/engram.db
+      # LLM — default: anthropic. Switch to ollama or claude-code as needed.
+      ENGRAM_LLM_PROVIDER: ${ENGRAM_LLM_PROVIDER:-anthropic}
+      ENGRAM_LLM_MODEL: ${ENGRAM_LLM_MODEL:-claude-haiku-4-5-20251001}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Embeddings — point at Ollama sidecar when using the "ollama" profile
+      ENGRAM_EMBEDDING_BASE_URL: ${ENGRAM_EMBEDDING_BASE_URL:-http://ollama:11434}
+      ENGRAM_EMBEDDING_MODEL: ${ENGRAM_EMBEDDING_MODEL:-nomic-embed-text}
+      # NER — point at spaCy sidecar when using the "ner" profile
+      ENGRAM_NER_PROVIDER: ${ENGRAM_NER_PROVIDER:-spacy}
+      ENGRAM_NER_SPACY_URL: ${ENGRAM_NER_SPACY_URL:-http://ner:5001}
+    restart: unless-stopped
+    depends_on:
+      ner:
+        condition: service_healthy
+        required: false
+      ollama:
+        condition: service_healthy
+        required: false
+
+  # spaCy NER sidecar — enable with --profile ner
+  ner:
+    profiles: [ner, full]
+    build:
+      context: ./ner
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s  # spaCy model download takes time on first start
+
+  # Ollama — enable with --profile ollama
+  ollama:
+    profiles: [ollama, full]
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  engram-data:
+  ollama-data:
