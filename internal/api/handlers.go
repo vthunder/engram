@@ -202,12 +202,136 @@ func (s *Services) handleSearch(w http.ResponseWriter, r *http.Request) {
 // --- Traces ---
 
 func (s *Services) handleListTraces(w http.ResponseWriter, r *http.Request) {
+	// Optional threshold filter: ?threshold=0.1&limit=20
+	thresholdStr := r.URL.Query().Get("threshold")
+	limitStr := r.URL.Query().Get("limit")
+
+	if thresholdStr != "" {
+		threshold, err := strconv.ParseFloat(thresholdStr, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_param", "threshold must be a float")
+			return
+		}
+		limit := 50
+		if limitStr != "" {
+			if n, err2 := strconv.Atoi(limitStr); err2 == nil && n > 0 {
+				limit = n
+			}
+		}
+		traces, err := s.Graph.GetActivatedTraces(threshold, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, traces)
+		return
+	}
+
 	traces, err := s.Graph.GetAllTraces()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, traces)
+}
+
+// handleListEpisodes returns recent episodes for a channel, or unconsolidated episode IDs.
+// GET /v1/episodes?channel=X&limit=N&unconsolidated=true
+func (s *Services) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
+	channel := r.URL.Query().Get("channel")
+	unconsolidated := r.URL.Query().Get("unconsolidated") == "true"
+	limit := 50
+	if lv := r.URL.Query().Get("limit"); lv != "" {
+		if n, err := strconv.Atoi(lv); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	if unconsolidated {
+		ids, err := s.Graph.GetUnconsolidatedEpisodeIDsForChannel(channel)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		// Return as a list of IDs
+		result := make([]string, 0, len(ids))
+		for id := range ids {
+			result = append(result, id)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ids": result})
+		return
+	}
+
+	episodes, err := s.Graph.GetRecentEpisodes(channel, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, episodes)
+}
+
+type batchSummariesRequest struct {
+	EpisodeIDs []string `json:"episode_ids"`
+	Level      int      `json:"level"`
+}
+
+// handleBatchEpisodeSummaries returns summaries for a set of episodes at a compression level.
+// POST /v1/episodes/summaries
+func (s *Services) handleBatchEpisodeSummaries(w http.ResponseWriter, r *http.Request) {
+	var req batchSummariesRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(req.EpisodeIDs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+	if req.Level <= 0 {
+		req.Level = 1
+	}
+
+	summaries, err := s.Graph.GetEpisodeSummariesBatch(req.EpisodeIDs, req.Level)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	// Convert to a map[episodeID]summary string
+	result := make(map[string]string, len(summaries))
+	for id, s := range summaries {
+		result[id] = s.Summary
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+type boostTracesRequest struct {
+	TraceIDs  []string `json:"trace_ids"`
+	Boost     float64  `json:"boost"`
+	Threshold float64  `json:"threshold,omitempty"`
+}
+
+// handleBoostTraces boosts activation for a set of traces.
+// POST /v1/traces/boost
+func (s *Services) handleBoostTraces(w http.ResponseWriter, r *http.Request) {
+	var req boostTracesRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(req.TraceIDs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	if req.Boost == 0 {
+		req.Boost = 0.1
+	}
+
+	if err := s.Graph.BoostActivation(req.TraceIDs, req.Boost, req.Threshold); err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Services) handleGetTrace(w http.ResponseWriter, r *http.Request) {
