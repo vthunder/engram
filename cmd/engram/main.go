@@ -140,6 +140,15 @@ func main() {
 	// MCP server (stdio transport — agents connect via stdin/stdout)
 	mcpSrv := engrammcp.NewServer(mcpSvc)
 
+	// If running as MCP (detected via ENGRAM_MCP env), serve stdio only (no REST)
+	if os.Getenv("ENGRAM_MCP") == "1" {
+		logger.Info("starting MCP stdio server (REST disabled)")
+		if err := mcpserver.ServeStdio(mcpSrv); err != nil {
+			logger.Error("MCP server error", "err", err)
+		}
+		return
+	}
+
 	// Start REST server
 	go func() {
 		logger.Info("REST server listening", "addr", restAddr)
@@ -147,15 +156,6 @@ func main() {
 			logger.Error("REST server error", "err", err)
 		}
 	}()
-
-	// If running as MCP (detected via --mcp flag or ENGRAM_MCP env), serve stdio
-	if os.Getenv("ENGRAM_MCP") == "1" {
-		logger.Info("starting MCP stdio server")
-		if err := mcpserver.ServeStdio(mcpSrv); err != nil {
-			logger.Error("MCP server error", "err", err)
-		}
-		return
-	}
 
 	// Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
