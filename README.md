@@ -240,28 +240,6 @@ Response `201`:
 {"id": "b5c8d1e4f7a0b3c6a9f2b9c1d4e7f0a2"}
 ```
 
-### Search
-
-#### `POST /v1/search`
-
-Retrieve relevant memories using hybrid search (semantic + spreading activation).
-
-Request:
-```json
-{"query": "Alice meeting preferences", "limit": 10}
-```
-
-`limit` defaults to 10.
-
-Response `200`:
-```json
-{
-  "engrams": [{"id": "c9d4e8f1a2b3c4d5e6f7a8b9c0d1e2f3", "summary": "Alice prefers morning meetings...", "activation": 0.82, ...}],
-  "episodes": [...],
-  "entities": [{"id": "ent-...", "name": "Alice", "type": "PERSON", ...}]
-}
-```
-
 ### Consolidation
 
 #### `POST /v1/consolidate`
@@ -275,15 +253,33 @@ Response `200`:
 
 Returns `503` if consolidation is not configured.
 
+### Response verbosity
+
+All read endpoints return **minimal responses by default** — just the fields needed to identify and display each object:
+
+| Type | Default fields |
+|------|---------------|
+| Engram | `id`, `summary` |
+| Episode | `id`, `content` |
+| Entity | `id`, `name` |
+
+Add `?detail=full` to any endpoint to get all fields. Embedding vectors are never returned.
+
 ### Engrams
 
 #### `GET /v1/engrams`
 
-List all consolidated engrams.
+List consolidated engrams. Returns `[{id, summary}]` by default.
+
+Query params:
+- `query` — semantic search (spreading activation); returns ranked results
+- `detail=full` — return all fields
+- `limit` — max results when using `?query=` (default 10)
+- `threshold` — filter by minimum activation level (list-all mode)
 
 #### `GET /v1/engrams/{id}?level=0`
 
-Get an engram by full ID or 5-char short ID.
+Get an engram by full ID or 5-char short ID. Returns `{id, summary}` by default.
 
 Query param `level` controls pyramid summary compression:
 - `0` — verbatim content (default)
@@ -295,16 +291,18 @@ Query param `level` controls pyramid summary compression:
 
 Any positive integer is accepted; the nearest available level is returned.
 
+Add `?detail=full` to include all fields alongside the (possibly compressed) summary.
+
 #### `GET /v1/engrams/{id}/context`
 
-Get an engram with its source episodes and linked entities.
+Get an engram with its source episodes and linked entities. All nested objects use the same minimal/full verbosity as the parent request.
 
 Response:
 ```json
 {
-  "engram": {...},
-  "source_episodes": [...],
-  "linked_entities": [{"id": "ent-...", "name": "Alice", "type": "PERSON"}]
+  "engram": {"id": "...", "summary": "..."},
+  "source_episodes": [{"id": "...", "content": "..."}],
+  "linked_entities": [{"id": "person:alice", "name": "Alice"}]
 }
 ```
 
@@ -321,27 +319,42 @@ Request (all optional):
 
 ### Episodes
 
+#### `GET /v1/episodes`
+
+List episodes. Returns `[{id, content}]` by default.
+
+Query params:
+- `query` — text substring search over episode content
+- `detail=full` — return all fields
+- `limit` — max results (default 100 for list-all, 10 when using `?query=`)
+
 #### `GET /v1/episodes/{id}`
 
-Get an episode by full ID or 5-char short ID.
+Get an episode by full ID or 5-char short ID. Returns `{id, content}` by default.
+
+Add `?detail=full` to include all fields.
 
 ### Entities
 
+#### `GET /v1/entities`
+
+List extracted named entities. Returns `[{id, name}]` by default.
+
+Query params:
+- `query` — text search over entity names and aliases
+- `detail=full` — return all fields
+- `type` — filter by entity type (see entity types below)
+- `limit` — max results (default 100; default 10 when using `?query=`)
+
 #### `GET /v1/entities/{id}?level=0`
 
-Get an entity by its canonical ID (e.g. `person:alice`).
+Get an entity by its canonical ID (e.g. `person:alice`). Returns `{id, name}` by default.
 
 Query param `level` controls pyramid summary compression (same semantics as engrams):
 - `0` — raw entity record (default)
 - `4` / `8` / `16` / `32` / `64` — approx N-word summary assembled from the entity's metadata and known relations
 
-#### `GET /v1/entities?type=PERSON&limit=100`
-
-List extracted named entities.
-
-Query params:
-- `type` — filter by entity type (see entity types below)
-- `limit` — max results (default 100)
+Add `?detail=full` to include all fields alongside the (possibly compressed) summary.
 
 **Entity types** (OntoNotes + extensions):
 

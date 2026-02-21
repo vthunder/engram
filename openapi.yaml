@@ -200,22 +200,6 @@ components:
         - OTHER
       description: OntoNotes-compatible entity type with custom extensions
 
-    RetrievalResult:
-      type: object
-      properties:
-        engrams:
-          type: array
-          items:
-            $ref: "#/components/schemas/Engram"
-        episodes:
-          type: array
-          items:
-            $ref: "#/components/schemas/Episode"
-        entities:
-          type: array
-          items:
-            $ref: "#/components/schemas/Entity"
-
     EngramContextResponse:
       type: object
       properties:
@@ -270,6 +254,49 @@ paths:
                     format: date-time
 
   /v1/episodes:
+    get:
+      summary: List or search episodes
+      description: |
+        List raw episodes, or search them by text with `?query=`.
+
+        **Default response** is minimal: `[{id, content}]`.
+        Add `?detail=full` for all fields (embeddings are never returned).
+      operationId: listEpisodes
+      tags:
+        - Episodes
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+          description: Text substring search over episode content
+        - name: detail
+          in: query
+          schema:
+            type: string
+            enum: [full]
+          description: "Return full fields instead of minimal. Use `detail=full`."
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+          description: Maximum results (default 100 for list-all, 10 when using ?query=)
+      responses:
+        "200":
+          description: List of episodes (minimal by default)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Episode"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     post:
       summary: Ingest an episode
       description: |
@@ -420,62 +447,44 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /v1/search:
-    post:
-      summary: Search memory
-      description: |
-        Retrieve relevant memories using hybrid search (semantic vector similarity
-        + spreading activation). Returns a mix of engrams, episodes, and entities
-        ranked by relevance.
-      operationId: search
-      tags:
-        - Search
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - query
-              properties:
-                query:
-                  type: string
-                  description: Natural language search query
-                limit:
-                  type: integer
-                  description: Maximum number of results to return
-                  default: 10
-      responses:
-        "200":
-          description: Search results
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RetrievalResult"
-        "400":
-          description: Missing query
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "500":
-          description: Retrieval error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
   /v1/engrams:
     get:
-      summary: List all engrams
-      description: Returns all consolidated memory engrams ordered by last accessed time.
+      summary: List or search engrams
+      description: |
+        List consolidated memory engrams, or search them semantically with `?query=`.
+
+        **Default response** is minimal: `[{id, summary}]`.
+        Add `?detail=full` for all fields (embeddings are never returned).
       operationId: listEngrams
       tags:
         - Engrams
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+          description: Natural language search query (semantic + spreading activation)
+        - name: detail
+          in: query
+          schema:
+            type: string
+            enum: [full]
+          description: "Return full fields instead of minimal. Use `detail=full`."
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+          description: Maximum results when using ?query= (ignored for list-all)
+        - name: threshold
+          in: query
+          schema:
+            type: number
+            format: double
+          description: Filter by minimum activation level (without ?query=)
       responses:
         "200":
-          description: List of engrams
+          description: List of engrams (minimal by default)
           content:
             application/json:
               schema:
@@ -514,9 +523,15 @@ paths:
             default: 0
             minimum: 0
           description: "Summary compression level: 0 = verbatim (default); N = approx N-word summary"
+        - name: detail
+          in: query
+          schema:
+            type: string
+            enum: [full]
+          description: "Return full fields instead of minimal. Use `detail=full`."
       responses:
         "200":
-          description: Engram object
+          description: Engram object (minimal by default)
           content:
             application/json:
               schema:
@@ -534,6 +549,10 @@ paths:
       description: |
         Returns the engram along with its source episodes and linked entities.
         Useful for understanding what the engram was derived from.
+
+        **Default response** is minimal: engram/episode/entity objects are cards
+        `{id, summary}` / `{id, content}` / `{id, name}`.
+        Add `?detail=full` for all fields (embeddings are never returned).
       operationId: getEngramContext
       tags:
         - Engrams
@@ -544,6 +563,12 @@ paths:
           schema:
             type: string
           description: Full engram ID or 5-char short ID
+        - name: detail
+          in: query
+          schema:
+            type: string
+            enum: [full]
+          description: "Return full fields instead of minimal. Use `detail=full`."
       responses:
         "200":
           description: Engram with source episodes and entities
@@ -613,7 +638,11 @@ paths:
   /v1/episodes/{id}:
     get:
       summary: Get an episode
-      description: Retrieve a single episode by its full ID or 5-character short ID.
+      description: |
+        Retrieve a single episode by its full ID or 5-character short ID.
+
+        **Default response** is minimal: `{id, content}`.
+        Add `?detail=full` for all fields (embeddings are never returned).
       operationId: getEpisode
       tags:
         - Episodes
@@ -624,6 +653,12 @@ paths:
           schema:
             type: string
           description: Full episode ID or 5-char short ID
+        - name: detail
+          in: query
+          schema:
+            type: string
+            enum: [full]
+          description: "Return full fields instead of minimal. Use `detail=full`."
       responses:
         "200":
           description: Episode object
@@ -640,13 +675,27 @@ paths:
 
   /v1/entities:
     get:
-      summary: List entities
+      summary: List or search entities
       description: |
-        List extracted named entities. Optionally filter by entity type.
+        List extracted named entities, or search them by name with `?query=`.
+
+        **Default response** is minimal: `[{id, name}]`.
+        Add `?detail=full` for all fields (embeddings are never returned).
       operationId: listEntities
       tags:
         - Entities
       parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+          description: Text search over entity names and aliases
+        - name: detail
+          in: query
+          schema:
+            type: string
+            enum: [full]
+          description: "Return full fields instead of minimal. Use `detail=full`."
         - name: type
           in: query
           schema:
@@ -657,7 +706,7 @@ paths:
           schema:
             type: integer
             default: 100
-          description: Maximum number of entities to return
+          description: Maximum results (default 100; default 10 when using ?query=)
       responses:
         "200":
           description: List of entities
@@ -682,6 +731,9 @@ paths:
         By default (`level=0`) returns the raw entity record. Set `level=N`
         to get an approximately N-word pyramid summary assembled from the
         entity's metadata and known relations (valid targets: 4, 8, 16, 32, 64).
+
+        **Default response** is minimal: `{id, name}`.
+        Add `?detail=full` for all fields (embeddings are never returned).
       operationId: getEntity
       tags:
         - Entities
@@ -699,6 +751,12 @@ paths:
             default: 0
             minimum: 0
           description: "Summary compression level: 0 = raw entity (default); N = approx N-word summary"
+        - name: detail
+          in: query
+          schema:
+            type: string
+            enum: [full]
+          description: "Return full fields instead of minimal. Use `detail=full`."
       responses:
         "200":
           description: Entity object
@@ -810,8 +868,6 @@ tags:
     description: Store new episodes and thoughts
   - name: Consolidation
     description: Run the consolidation pipeline
-  - name: Search
-    description: Retrieve memories by semantic similarity
   - name: Engrams
     description: Access consolidated memories (Tier 3)
   - name: Episodes

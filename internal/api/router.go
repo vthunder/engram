@@ -26,9 +26,6 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 		// Consolidation
 		r.Post("/v1/consolidate", svc.handleConsolidate)
 
-		// Search + retrieval
-		r.Post("/v1/search", svc.handleSearch)
-
 		// Engrams
 		r.Get("/v1/engrams", svc.handleListEngrams)
 		r.Get("/v1/engrams/{id}", svc.handleGetEngram)

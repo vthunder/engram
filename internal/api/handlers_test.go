@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -253,29 +252,17 @@ func TestIngestThought_Success(t *testing.T) {
 	}
 }
 
-// --- Search ---
+// --- Query on list endpoints ---
 
-func TestSearch_MissingQuery(t *testing.T) {
+func TestListEngrams_Query_EmptyDB(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	resp := doRequest(t, srv, http.MethodPost, "/v1/search", `{}`)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", resp.StatusCode)
-	}
-}
-
-func TestSearch_EmptyDB(t *testing.T) {
-	_, srv, cleanup := setupTestServices(t)
-	defer cleanup()
-
-	resp := doRequest(t, srv, http.MethodPost, "/v1/search", `{"query":"anything"}`)
+	resp := doRequest(t, srv, http.MethodGet, "/v1/engrams?query=anything", "")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected 200 on empty DB search, got %d", resp.StatusCode)
+		t.Errorf("expected 200 on empty DB query, got %d", resp.StatusCode)
 	}
 }
 
@@ -346,13 +333,13 @@ func TestGetEngramContext_Found(t *testing.T) {
 
 	// Use 5-char prefix for lookup
 	resp := doRequest(t, srv, http.MethodGet, "/v1/engrams/deadb/context", "")
-	var result engramContextResponse
+	var result map[string]any
 	decodeJSON(t, resp, &result)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
-	if result.Engram == nil {
+	if result["engram"] == nil {
 		t.Error("expected non-nil engram in context response")
 	}
 }
@@ -586,11 +573,7 @@ func TestFullCycle_IngestAndList(t *testing.T) {
 	}
 
 	// Search with keyword (no embedding available but should not error)
-	searchBody := bytes.NewBufferString(`{"query":"architecture","limit":5}`)
-	searchReq, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/search", searchBody)
-	searchReq.Header.Set("Content-Type", "application/json")
-	searchReq.Header.Set("Authorization", "Bearer "+testAPIKey)
-	searchResp, _ := http.DefaultClient.Do(searchReq)
+	searchResp := doRequest(t, srv, http.MethodGet, "/v1/engrams?query=architecture&limit=5", "")
 	searchResp.Body.Close()
 
 	if searchResp.StatusCode != http.StatusOK {

@@ -22,6 +22,38 @@ type Services struct {
 	Logger       *slog.Logger
 }
 
+// --- Response helpers ---
+
+// engramCard returns the minimal engram representation: {id, summary}.
+func engramCard(e *graph.Engram) map[string]any {
+	return map[string]any{"id": e.ID, "summary": e.Summary}
+}
+
+// entityCard returns the minimal entity representation: {id, name}.
+func entityCard(e *graph.Entity) map[string]any {
+	return map[string]any{"id": e.ID, "name": e.Name}
+}
+
+// episodeCard returns the minimal episode representation: {id, content}.
+func episodeCard(e *graph.Episode) map[string]any {
+	return map[string]any{"id": e.ID, "content": e.Content}
+}
+
+// parseDetail returns true if ?detail=full is set.
+func parseDetail(r *http.Request) bool {
+	return r.URL.Query().Get("detail") == "full"
+}
+
+// parseLimit parses ?limit= with a given default.
+func parseLimit(r *http.Request, def int) int {
+	if lv := r.URL.Query().Get("limit"); lv != "" {
+		if n, err := strconv.Atoi(lv); err == nil && n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
 // --- Ingest ---
 
 type ingestEpisodeRequest struct {
@@ -159,82 +191,83 @@ func (s *Services) handleConsolidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// --- Search ---
-
-type searchRequest struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit,omitempty"`
-}
-
-func (s *Services) handleSearch(w http.ResponseWriter, r *http.Request) {
-	var req searchRequest
-	if err := decode(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if req.Query == "" {
-		writeError(w, http.StatusBadRequest, "missing_field", "query is required")
-		return
-	}
-	if req.Limit <= 0 {
-		req.Limit = 10
-	}
-
-	var queryEmb []float64
-	if s.EmbedClient != nil {
-		var err error
-		queryEmb, err = s.EmbedClient.Embed(req.Query)
-		if err != nil {
-			s.Logger.Warn("query embedding failed", "err", err)
-		}
-	}
-
-	result, err := s.Graph.Retrieve(queryEmb, req.Query, req.Limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "retrieval_error", err.Error())
-		return
-	}
-
-	for _, t := range result.Engrams {
-		t.Embedding = nil
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"engrams": result.Engrams})
-}
-
 // --- Engrams ---
 
 func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
-	// Optional threshold filter: ?threshold=0.1&limit=20
-	thresholdStr := r.URL.Query().Get("threshold")
-	limitStr := r.URL.Query().Get("limit")
+	full := parseDetail(r)
+	queryStr := r.URL.Query().Get("query")
 
+	// Semantic search path
+	if queryStr != "" {
+		limit := parseLimit(r, 10)
+		var queryEmb []float64
+		if s.EmbedClient != nil {
+			var err error
+			queryEmb, err = s.EmbedClient.Embed(queryStr)
+			if err != nil {
+				s.Logger.Warn("query embedding failed", "err", err)
+			}
+		}
+		result, err := s.Graph.Retrieve(queryEmb, queryStr, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "retrieval_error", err.Error())
+			return
+		}
+		if full {
+			for _, e := range result.Engrams {
+				e.Embedding = nil
+			}
+			writeJSON(w, http.StatusOK, result.Engrams)
+		} else {
+			cards := make([]map[string]any, 0, len(result.Engrams))
+			for _, e := range result.Engrams {
+				cards = append(cards, engramCard(e))
+			}
+			writeJSON(w, http.StatusOK, cards)
+		}
+		return
+	}
+
+	// Threshold filter path
+	thresholdStr := r.URL.Query().Get("threshold")
 	if thresholdStr != "" {
 		threshold, err := strconv.ParseFloat(thresholdStr, 64)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_param", "threshold must be a float")
 			return
 		}
-		limit := 50
-		if limitStr != "" {
-			if n, err2 := strconv.Atoi(limitStr); err2 == nil && n > 0 {
-				limit = n
-			}
-		}
+		limit := parseLimit(r, 50)
 		engrams, err := s.Graph.GetActivatedEngrams(threshold, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, engrams)
+		writeEngramList(w, engrams, full)
 		return
 	}
 
+	// List all
 	engrams, err := s.Graph.GetAllEngrams()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, engrams)
+	writeEngramList(w, engrams, full)
+}
+
+func writeEngramList(w http.ResponseWriter, engrams []*graph.Engram, full bool) {
+	if full {
+		for _, e := range engrams {
+			e.Embedding = nil
+		}
+		writeJSON(w, http.StatusOK, engrams)
+	} else {
+		cards := make([]map[string]any, 0, len(engrams))
+		for _, e := range engrams {
+			cards = append(cards, engramCard(e))
+		}
+		writeJSON(w, http.StatusOK, cards)
+	}
 }
 
 func (s *Services) handleGetEngram(w http.ResponseWriter, r *http.Request) {
@@ -267,13 +300,12 @@ func (s *Services) handleGetEngram(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, engram)
-}
-
-type engramContextResponse struct {
-	Engram   *graph.Engram   `json:"engram"`
-	Sources  []graph.Episode `json:"source_episodes"`
-	Entities []*graph.Entity `json:"linked_entities"`
+	if parseDetail(r) {
+		engram.Embedding = nil
+		writeJSON(w, http.StatusOK, engram)
+	} else {
+		writeJSON(w, http.StatusOK, engramCard(engram))
+	}
 }
 
 func (s *Services) handleGetEngramContext(w http.ResponseWriter, r *http.Request) {
@@ -303,24 +335,57 @@ func (s *Services) handleGetEngramContext(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	writeJSON(w, http.StatusOK, engramContextResponse{
-		Engram:   engram,
-		Sources:  sources,
-		Entities: entities,
-	})
+	full := parseDetail(r)
+	if full {
+		engram.Embedding = nil
+		for i := range sources {
+			sources[i].Embedding = nil
+		}
+		for _, e := range entities {
+			e.Embedding = nil
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"engram":          engram,
+			"source_episodes": sources,
+			"linked_entities": entities,
+		})
+	} else {
+		sourcCards := make([]map[string]any, 0, len(sources))
+		for i := range sources {
+			sourcCards = append(sourcCards, episodeCard(&sources[i]))
+		}
+		entCards := make([]map[string]any, 0, len(entities))
+		for _, e := range entities {
+			entCards = append(entCards, entityCard(e))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"engram":          engramCard(engram),
+			"source_episodes": sourcCards,
+			"linked_entities": entCards,
+		})
+	}
 }
 
 // --- Episodes ---
 
 func (s *Services) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
+	full := parseDetail(r)
+	queryStr := r.URL.Query().Get("query")
+	limit := parseLimit(r, 50)
+
+	// Text search path
+	if queryStr != "" {
+		episodes, err := s.Graph.SearchEpisodesByText(queryStr, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		writeEpisodeList(w, episodes, full)
+		return
+	}
+
 	channel := r.URL.Query().Get("channel")
 	unconsolidated := r.URL.Query().Get("unconsolidated") == "true"
-	limit := 50
-	if lv := r.URL.Query().Get("limit"); lv != "" {
-		if n, err := strconv.Atoi(lv); err == nil && n > 0 {
-			limit = n
-		}
-	}
 
 	if unconsolidated {
 		ids, err := s.Graph.GetUnconsolidatedEpisodeIDsForChannel(channel)
@@ -328,7 +393,6 @@ func (s *Services) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}
-		// Return as a list of IDs
 		result := make([]string, 0, len(ids))
 		for id := range ids {
 			result = append(result, id)
@@ -342,7 +406,22 @@ func (s *Services) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, episodes)
+	writeEpisodeList(w, episodes, full)
+}
+
+func writeEpisodeList(w http.ResponseWriter, episodes []*graph.Episode, full bool) {
+	if full {
+		for _, e := range episodes {
+			e.Embedding = nil
+		}
+		writeJSON(w, http.StatusOK, episodes)
+	} else {
+		cards := make([]map[string]any, 0, len(episodes))
+		for _, e := range episodes {
+			cards = append(cards, episodeCard(e))
+		}
+		writeJSON(w, http.StatusOK, cards)
+	}
 }
 
 type batchSummariesRequest struct {
@@ -396,20 +475,33 @@ func (s *Services) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, ep)
+	if parseDetail(r) {
+		ep.Embedding = nil
+		writeJSON(w, http.StatusOK, ep)
+	} else {
+		writeJSON(w, http.StatusOK, episodeCard(ep))
+	}
 }
 
 // --- Entities ---
 
 func (s *Services) handleListEntities(w http.ResponseWriter, r *http.Request) {
-	entityType := r.URL.Query().Get("type")
-	limit := 100
-	if lv := r.URL.Query().Get("limit"); lv != "" {
-		if n, err := strconv.Atoi(lv); err == nil {
-			limit = n
+	full := parseDetail(r)
+	queryStr := r.URL.Query().Get("query")
+	limit := parseLimit(r, 100)
+
+	// Text search path
+	if queryStr != "" {
+		entities, err := s.Graph.FindEntitiesByText(queryStr, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
 		}
+		writeEntityList(w, entities, full)
+		return
 	}
 
+	entityType := r.URL.Query().Get("type")
 	var entities []*graph.Entity
 	var err error
 	if entityType != "" {
@@ -421,7 +513,22 @@ func (s *Services) handleListEntities(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, entities)
+	writeEntityList(w, entities, full)
+}
+
+func writeEntityList(w http.ResponseWriter, entities []*graph.Entity, full bool) {
+	if full {
+		for _, e := range entities {
+			e.Embedding = nil
+		}
+		writeJSON(w, http.StatusOK, entities)
+	} else {
+		cards := make([]map[string]any, 0, len(entities))
+		for _, e := range entities {
+			cards = append(cards, entityCard(e))
+		}
+		writeJSON(w, http.StatusOK, cards)
+	}
 }
 
 func (s *Services) handleGetEntity(w http.ResponseWriter, r *http.Request) {
@@ -445,7 +552,12 @@ func (s *Services) handleGetEntity(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, entity)
+	if parseDetail(r) {
+		entity.Embedding = nil
+		writeJSON(w, http.StatusOK, entity)
+	} else {
+		writeJSON(w, http.StatusOK, entityCard(entity))
+	}
 }
 
 // --- Activation ---

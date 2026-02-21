@@ -102,6 +102,36 @@ func (g *DB) GetAllEpisodes(limit int) ([]*Episode, error) {
 	return episodes, nil
 }
 
+// SearchEpisodesByText performs a case-insensitive substring search on episode content.
+func (g *DB) SearchEpisodesByText(query string, limit int) ([]*Episode, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := g.db.Query(`
+		SELECT id, content, token_count, source, author, author_id, channel,
+			timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
+			embedding, reply_to, authorization_checked, has_authorization, created_at
+		FROM episodes
+		WHERE content LIKE '%' || ? || '%'
+		ORDER BY timestamp_event DESC
+		LIMIT ?
+	`, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search episodes: %w", err)
+	}
+	defer rows.Close()
+
+	var episodes []*Episode
+	for rows.Next() {
+		ep, err := scanEpisodeRow(rows)
+		if err != nil {
+			continue
+		}
+		episodes = append(episodes, ep)
+	}
+	return episodes, nil
+}
+
 // CountEpisodes returns the total number of episodes
 func (g *DB) CountEpisodes() (int, error) {
 	var count int
