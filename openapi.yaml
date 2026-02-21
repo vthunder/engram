@@ -35,11 +35,8 @@ components:
       properties:
         id:
           type: string
-          example: "ep-550e8400-e29b-41d4-a716-446655440000"
-        short_id:
-          type: string
-          description: First 5 chars of BLAKE3 hash, for display
-          example: "a3f2b"
+          description: 32-char BLAKE3 hex ID; use any 5+ char prefix to reference
+          example: "a3f2b9c1d4e7f0a2b5c8d1e4f7a0b3c6"
         content:
           type: string
         token_count:
@@ -89,7 +86,8 @@ components:
       properties:
         id:
           type: string
-          example: "ent-550e8400-e29b-41d4-a716-446655440000"
+          description: Canonical key — type:name in lowercase (e.g. person:alice)
+          example: "person:alice"
         name:
           type: string
           example: "Alice"
@@ -120,11 +118,8 @@ components:
       properties:
         id:
           type: string
-          example: "tr-550e8400-e29b-41d4-a716-446655440000"
-        short_id:
-          type: string
-          description: First 5 chars of BLAKE3 hash, for display
-          example: "c9d4e"
+          description: 32-char BLAKE3 hex ID; use any 5+ char prefix to reference
+          example: "c9d4e8f1a2b3c4d5e6f7a8b9c0d1e2f3"
         summary:
           type: string
           description: Consolidated summary of source episodes
@@ -329,8 +324,7 @@ paths:
                 properties:
                   id:
                     type: string
-                  short_id:
-                    type: string
+                    description: 32-char BLAKE3 hex ID
         "400":
           description: Missing required field or malformed JSON
           content:

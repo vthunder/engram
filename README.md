@@ -223,7 +223,7 @@ Request:
 
 Response `201`:
 ```json
-{"id": "ep-550e8400-...", "short_id": "a3f2b"}
+{"id": "a3f2b9c1d4e7f0a2b5c8d1e4f7a0b3c6"}
 ```
 
 #### `POST /v1/thoughts`
@@ -237,7 +237,7 @@ Request:
 
 Response `201`:
 ```json
-{"id": "ep-550e8400-..."}
+{"id": "b5c8d1e4f7a0b3c6a9f2b9c1d4e7f0a2"}
 ```
 
 ### Search
@@ -256,7 +256,7 @@ Request:
 Response `200`:
 ```json
 {
-  "engrams": [{"id": "tr-...", "summary": "Alice prefers morning meetings...", "activation": 0.82, ...}],
+  "engrams": [{"id": "c9d4e8f1a2b3c4d5e6f7a8b9c0d1e2f3", "summary": "Alice prefers morning meetings...", "activation": 0.82, ...}],
   "episodes": [...],
   "entities": [{"id": "ent-...", "name": "Alice", "type": "PERSON", ...}]
 }
