@@ -281,14 +281,19 @@ Returns `503` if consolidation is not configured.
 
 List all consolidated engrams.
 
-#### `GET /v1/engrams/{id}?level=1`
+#### `GET /v1/engrams/{id}?level=0`
 
 Get an engram by full ID or 5-char short ID.
 
-Query param `level` controls summary compression:
-- `0` — raw engram, no summary override
-- `1` — L1 summary (default, concise)
-- `2` — L2 summary (more compressed)
+Query param `level` controls pyramid summary compression:
+- `0` — verbatim content (default)
+- `4` — ~4-word summary
+- `8` — ~8-word summary
+- `16` — ~16-word summary
+- `32` — ~32-word summary
+- `64` — ~64-word summary
+
+Any positive integer is accepted; the nearest available level is returned.
 
 #### `GET /v1/engrams/{id}/context`
 
@@ -321,6 +326,14 @@ Request (all optional):
 Get an episode by full ID or 5-char short ID.
 
 ### Entities
+
+#### `GET /v1/entities/{id}?level=0`
+
+Get an entity by its canonical ID (e.g. `person:alice`).
+
+Query param `level` controls pyramid summary compression (same semantics as engrams):
+- `0` — raw entity record (default)
+- `4` / `8` / `16` / `32` / `64` — approx N-word summary assembled from the entity's metadata and known relations
 
 #### `GET /v1/entities?type=PERSON&limit=100`
 
@@ -501,4 +514,6 @@ services:
 
 ## License
 
-MIT
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at https://mozilla.org/MPL/2.0/.

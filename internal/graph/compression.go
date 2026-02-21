@@ -460,6 +460,134 @@ func compressTraceToTarget(content string, compressor Compressor, targetWords in
 	return summary, nil
 }
 
+// EntitySummary represents a compressed version of an entity
+type EntitySummary struct {
+	ID               int    `json:"id"`
+	EntityID         string `json:"entity_id"`
+	CompressionLevel int    `json:"compression_level"`
+	Summary          string `json:"summary"`
+	Tokens           int    `json:"tokens"`
+}
+
+// AddEntitySummary stores a summary for an entity at a given compression level
+func (g *DB) AddEntitySummary(entityID string, level int, summary string, tokens int) error {
+	_, err := g.db.Exec(`
+		INSERT OR REPLACE INTO entity_summaries (entity_id, compression_level, summary, tokens)
+		VALUES (?, ?, ?, ?)
+	`, entityID, level, summary, tokens)
+	return err
+}
+
+// GetEntitySummary retrieves a summary for an entity at a specific compression level.
+// Falls back to higher compression levels if the requested level doesn't exist.
+func (g *DB) GetEntitySummary(entityID string, level int) (*EntitySummary, error) {
+	for lvl := level; lvl <= CompressionLevelMax; lvl++ {
+		var summary EntitySummary
+		err := g.db.QueryRow(`
+			SELECT id, entity_id, compression_level, summary, tokens
+			FROM entity_summaries
+			WHERE entity_id = ? AND compression_level = ?
+		`, entityID, lvl).Scan(
+			&summary.ID,
+			&summary.EntityID,
+			&summary.CompressionLevel,
+			&summary.Summary,
+			&summary.Tokens,
+		)
+		if err == nil {
+			return &summary, nil
+		}
+	}
+	return nil, nil
+}
+
+// DeleteEntitySummaries removes all summaries for an entity
+func (g *DB) DeleteEntitySummaries(entityID string) error {
+	_, err := g.db.Exec(`DELETE FROM entity_summaries WHERE entity_id = ?`, entityID)
+	return err
+}
+
+// GenerateEntityPyramid creates cascading summaries (L64→L32→L16→L8→L4) for an entity.
+// Source content is assembled from the entity's name, type, aliases, and known relations.
+func (g *DB) GenerateEntityPyramid(entityID string, compressor Compressor) error {
+	if compressor == nil {
+		return fmt.Errorf("compressor required")
+	}
+
+	entity, err := g.GetEntity(entityID)
+	if err != nil || entity == nil {
+		return fmt.Errorf("entity not found: %s", entityID)
+	}
+
+	// Assemble entity description from metadata and relations
+	var parts []string
+	parts = append(parts, fmt.Sprintf("%s (%s)", entity.Name, strings.ToLower(string(entity.Type))))
+
+	aliases, _ := g.GetEntityAliases(entityID)
+	if len(aliases) > 0 {
+		parts = append(parts, "also known as "+strings.Join(aliases, ", "))
+	}
+
+	relations, _ := g.GetValidRelationsFor(entityID)
+	for _, r := range relations {
+		otherID := r.ToID
+		if otherID == entityID {
+			otherID = r.FromID
+		}
+		other, err := g.GetEntity(otherID)
+		if err != nil || other == nil {
+			continue
+		}
+		relType := strings.ToLower(strings.ReplaceAll(string(r.RelationType), "_", " "))
+		parts = append(parts, fmt.Sprintf("%s %s", relType, other.Name))
+	}
+
+	sourceContent := strings.Join(parts, "; ")
+	wordCount := estimateWordCount(sourceContent)
+
+	// Store L0 (verbatim assembled description)
+	if err := g.AddEntitySummary(entityID, CompressionLevelVerbatim, sourceContent, estimateTokens(sourceContent)); err != nil {
+		return fmt.Errorf("failed to store L0 entity summary: %w", err)
+	}
+
+	// Generate cascading pyramid L64→L32→L16→L8→L4
+	l64Summary, err := compressTraceToTarget(sourceContent, compressor, 64, wordCount)
+	if err != nil {
+		return fmt.Errorf("L64 entity compression failed: %w", err)
+	}
+	g.AddEntitySummary(entityID, CompressionLevel64, l64Summary, estimateTokens(l64Summary))
+
+	l64Words := estimateWordCount(l64Summary)
+	l32Summary, err := compressTraceToTarget(l64Summary, compressor, 32, l64Words)
+	if err != nil {
+		return fmt.Errorf("L32 entity compression failed: %w", err)
+	}
+	g.AddEntitySummary(entityID, CompressionLevel32, l32Summary, estimateTokens(l32Summary))
+
+	l32Words := estimateWordCount(l32Summary)
+	l16Summary, err := compressTraceToTarget(l32Summary, compressor, 16, l32Words)
+	if err != nil {
+		return fmt.Errorf("L16 entity compression failed: %w", err)
+	}
+	g.AddEntitySummary(entityID, CompressionLevel16, l16Summary, estimateTokens(l16Summary))
+
+	l16Words := estimateWordCount(l16Summary)
+	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16Words)
+	if err != nil {
+		return fmt.Errorf("L8 entity compression failed: %w", err)
+	}
+	g.AddEntitySummary(entityID, CompressionLevel8, l8Summary, estimateTokens(l8Summary))
+
+	l8Words := estimateWordCount(l8Summary)
+	l4Summary, err := compressTraceToTarget(l8Summary, compressor, 4, l8Words)
+	if err != nil {
+		return fmt.Errorf("L4 entity compression failed: %w", err)
+	}
+	g.AddEntitySummary(entityID, CompressionLevel4, l4Summary, estimateTokens(l4Summary))
+
+	return nil
+}
+
 // buildTraceCompressionPrompt constructs a prompt for trace compression to target word count
 func buildTraceCompressionPrompt(content string, targetWords int) string {
 	prompt := fmt.Sprintf(`Compress this conversation into a memory trace summary of %d words or less.

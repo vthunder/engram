@@ -297,7 +297,7 @@ func (g *DB) ReconsolidateEngram(
 		}
 	}
 
-	err = g.RegeneratePyramidSummaries(engramID, summary)
+	err = g.RegeneratePyramidSummaries(engramID, summary, nil)
 	if err != nil {
 		return fmt.Errorf("failed to regenerate pyramid: %w", err)
 	}
@@ -321,8 +321,10 @@ func (g *DB) updateEngramContent(engramID string, summary string, embedding []fl
 	return err
 }
 
-// RegeneratePyramidSummaries recreates all compression levels for an engram
-func (g *DB) RegeneratePyramidSummaries(engramID string, baseSummary string) error {
+// RegeneratePyramidSummaries recreates all compression levels for an engram.
+// Stores L0 (verbatim) synchronously; if compressor is non-nil, generates the
+// full L4–L64 pyramid asynchronously in a background goroutine.
+func (g *DB) RegeneratePyramidSummaries(engramID string, baseSummary string, compressor Compressor) error {
 	_, err := g.db.Exec(`DELETE FROM engram_summaries WHERE engram_id = ?`, engramID)
 	if err != nil {
 		return err
@@ -334,6 +336,22 @@ func (g *DB) RegeneratePyramidSummaries(engramID string, baseSummary string) err
 	`, engramID, baseSummary, len(baseSummary)/4)
 	if err != nil {
 		return fmt.Errorf("failed to store level 0 summary: %w", err)
+	}
+
+	if compressor != nil {
+		go func() {
+			sourceEpisodes, err := g.GetEngramSourceEpisodes(engramID)
+			if err != nil || len(sourceEpisodes) == 0 {
+				return
+			}
+			eps := make([]*Episode, len(sourceEpisodes))
+			for i := range sourceEpisodes {
+				eps[i] = &sourceEpisodes[i]
+			}
+			if err := g.GenerateEngramPyramid(engramID, eps, compressor); err != nil {
+				log.Printf("[pyramid] engram %s: %v", engramID[:8], err)
+			}
+		}()
 	}
 
 	return nil

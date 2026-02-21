@@ -255,7 +255,7 @@ func (s *Services) handleGetEngram(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	level := 1
+	level := 0
 	if lv := r.URL.Query().Get("level"); lv != "" {
 		if n, err2 := strconv.Atoi(lv); err2 == nil {
 			level = n
@@ -422,6 +422,30 @@ func (s *Services) handleListEntities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, entities)
+}
+
+func (s *Services) handleGetEntity(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	entity, err := s.Graph.GetEntity(id)
+	if err != nil || entity == nil {
+		writeError(w, http.StatusNotFound, "not_found", "entity not found")
+		return
+	}
+
+	level := 0
+	if lv := r.URL.Query().Get("level"); lv != "" {
+		if n, err2 := strconv.Atoi(lv); err2 == nil {
+			level = n
+		}
+	}
+	if level > 0 {
+		if summary, err2 := s.Graph.GetEntitySummary(entity.ID, level); err2 == nil && summary != nil {
+			entity.Summary = summary.Summary
+		}
+	}
+
+	writeJSON(w, http.StatusOK, entity)
 }
 
 // --- Activation ---

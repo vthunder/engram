@@ -114,6 +114,7 @@ type Entity struct {
 	Salience  float64    `json:"salience"`
 	Embedding []float64  `json:"embedding,omitempty"`
 	Aliases   []string   `json:"aliases,omitempty"`
+	Summary   string     `json:"summary,omitempty"` // Populated by pyramid level on retrieval
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 }

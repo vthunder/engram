@@ -465,7 +465,7 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 		}
 	}
 
-	// Link engram to all entities (only if entity exists)
+	// Link engram to all entities (only if entity exists) and regenerate entity pyramids
 	for entityID := range group.entityIDs {
 		// Check if entity exists before attempting to link
 		if exists, _ := c.graph.EntityExists(entityID); !exists {
@@ -473,6 +473,15 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 		}
 		if err := c.graph.LinkEngramToEntity(engramID, entityID); err != nil {
 			log.Printf("Failed to link trace to entity %s: %v", entityID, err)
+		}
+		// Regenerate entity pyramid asynchronously (relations may have been updated)
+		if c.llm != nil {
+			eid := entityID
+			go func() {
+				if err := c.graph.GenerateEntityPyramid(eid, c.llm); err != nil {
+					log.Printf("Failed to generate entity pyramid for %s: %v", eid, err)
+				}
+			}()
 		}
 	}
 

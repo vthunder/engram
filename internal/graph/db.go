@@ -936,6 +936,30 @@ func (g *DB) runMigrations() error {
 		}
 	}
 
+	// Migration v22: Add entity_summaries table for pyramid summaries
+	if version < 22 {
+		stmts := []string{
+			`CREATE TABLE IF NOT EXISTS entity_summaries (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				entity_id        TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+				compression_level INTEGER NOT NULL,
+				summary          TEXT NOT NULL,
+				tokens           INTEGER NOT NULL,
+				created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(entity_id, compression_level)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_entity_summaries_entity ON entity_summaries(entity_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_entity_summaries_level ON entity_summaries(compression_level)`,
+		}
+		for _, sql := range stmts {
+			if _, err := g.db.Exec(sql); err != nil {
+				log.Printf("[graph] Migration v22 error: %v", err)
+			}
+		}
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (22)")
+		log.Println("[graph] Migration to v22 completed: entity_summaries table added")
+	}
+
 	return nil
 }
 

@@ -106,6 +106,9 @@ components:
           type: array
           items:
             type: string
+        summary:
+          type: string
+          description: Pyramid summary (populated when level>0 is requested)
         created_at:
           type: string
           format: date-time
@@ -491,8 +494,9 @@ paths:
       summary: Get an engram
       description: |
         Retrieve a single engram by its full ID or 5-character short ID.
-        By default returns with L1 summary. Set `level=0` for raw engram
-        without summary, or `level=2` for L2 compressed summary.
+        By default (`level=0`) returns the verbatim summary. Set `level=N`
+        to get an approximately N-word pyramid summary (valid generation
+        targets: 4, 8, 16, 32, 64; the nearest available level is used).
       operationId: getEngram
       tags:
         - Engrams
@@ -507,10 +511,9 @@ paths:
           in: query
           schema:
             type: integer
-            default: 1
+            default: 0
             minimum: 0
-            maximum: 2
-          description: Summary compression level (0=raw, 1=L1, 2=L2)
+          description: "Summary compression level: 0 = verbatim (default); N = approx N-word summary"
       responses:
         "200":
           description: Engram object
@@ -666,6 +669,45 @@ paths:
                   $ref: "#/components/schemas/Entity"
         "500":
           description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/entities/{id}:
+    get:
+      summary: Get an entity
+      description: |
+        Retrieve a single entity by its canonical ID (type:name).
+        By default (`level=0`) returns the raw entity record. Set `level=N`
+        to get an approximately N-word pyramid summary assembled from the
+        entity's metadata and known relations (valid targets: 4, 8, 16, 32, 64).
+      operationId: getEntity
+      tags:
+        - Entities
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Entity ID (e.g. person:alice)
+        - name: level
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+          description: "Summary compression level: 0 = raw entity (default); N = approx N-word summary"
+      responses:
+        "200":
+          description: Entity object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entity"
+        "404":
+          description: Entity not found
           content:
             application/json:
               schema:
