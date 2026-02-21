@@ -393,6 +393,10 @@ paths:
       description: |
         Store a free-form thought or observation. Shorthand for ingesting
         an episode with `source: "thought"` — no source or author metadata required.
+
+        `author`/`author_id` are automatically stamped from the identity config
+        (if configured). Named entities are extracted in the background if a NER
+        service is configured, identical to `POST /v1/episodes`.
       operationId: ingestThought
       tags:
         - Ingest
@@ -482,7 +486,11 @@ paths:
           in: query
           schema:
             type: string
-          description: Natural language search query (semantic + spreading activation)
+          description: |
+            Natural language search query. Retrieval uses spreading activation with
+            three concurrent seed triggers: semantic KNN, lexical BM25, and entity
+            regex matching. When a NER service is configured, entities extracted from
+            the query string also seed the activation graph (fourth trigger).
         - name: detail
           in: query
           schema:
@@ -799,6 +807,48 @@ paths:
                 $ref: "#/components/schemas/Entity"
         "404":
           description: Entity not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/entities/{id}/engrams:
+    get:
+      summary: List engrams linked to an entity
+      description: |
+        Returns all consolidated engrams that mention the given entity.
+        Engrams are linked to entities during the consolidation pipeline when
+        episode-entity associations (from NER at ingestion time) are present.
+
+        **Default response** is minimal: `[{id, summary}]`.
+        Add `?detail=full` for all fields (embeddings are never returned).
+      operationId: getEntityEngrams
+      tags:
+        - Entities
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: "Entity ID (e.g. ent:Alice)"
+        - name: detail
+          in: query
+          schema:
+            type: string
+            enum: [full]
+          description: "Return full fields instead of minimal. Use `detail=full`."
+      responses:
+        "200":
+          description: List of engrams linked to the entity
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Engram"
+        "500":
+          description: Database error
           content:
             application/json:
               schema:
