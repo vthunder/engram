@@ -400,6 +400,27 @@ func writeEngramList(w http.ResponseWriter, engrams []*graph.Engram, full bool) 
 	}
 }
 
+func (s *Services) handleDeleteEngram(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	// Try prefix resolution if exact ID not found
+	engram, err := s.Graph.GetEngram(id)
+	if err != nil || engram == nil {
+		fullID, resolveErr := s.Graph.ResolveEngramID(id)
+		if resolveErr != nil {
+			writeError(w, http.StatusNotFound, "not_found", "engram not found")
+			return
+		}
+		id = fullID
+	}
+
+	if err := s.Graph.DeleteEngram(id); err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Services) handleGetEngram(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
