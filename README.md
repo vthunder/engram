@@ -12,7 +12,7 @@ Engram stores memories in a three-tier graph:
 |------|------|-------------|
 | 1 | **Episodes** | Raw ingested messages, events, or observations |
 | 2 | **Entities** | Named entities extracted from episodes (people, orgs, places, etc.) |
-| 3 | **Traces** | Consolidated memory summaries, built from episode clusters |
+| 3 | **Engrams** | Consolidated memory summaries, built from episode clusters |
 
 The retrieval algorithm uses **spreading activation**: a dual-trigger seed (semantic vector similarity + lexical FTS5) that propagates through the graph to surface contextually relevant memories, even ones not directly matched by the query.
 
@@ -256,7 +256,7 @@ Request:
 Response `200`:
 ```json
 {
-  "traces": [{"id": "tr-...", "summary": "Alice prefers morning meetings...", "activation": 0.82, ...}],
+  "engrams": [{"id": "tr-...", "summary": "Alice prefers morning meetings...", "activation": 0.82, ...}],
   "episodes": [...],
   "entities": [{"id": "ent-...", "name": "Alice", "type": "PERSON", ...}]
 }
@@ -266,46 +266,46 @@ Response `200`:
 
 #### `POST /v1/consolidate`
 
-Trigger the consolidation pipeline manually. Clusters recent episodes by semantic similarity, generates summaries via LLM, and promotes them to traces.
+Trigger the consolidation pipeline manually. Clusters recent episodes by semantic similarity, generates summaries via LLM, and promotes them to engrams.
 
 Response `200`:
 ```json
-{"traces_created": 3, "duration_ms": 1240}
+{"engrams_created": 3, "duration_ms": 1240}
 ```
 
 Returns `503` if consolidation is not configured.
 
-### Traces
+### Engrams
 
-#### `GET /v1/traces`
+#### `GET /v1/engrams`
 
-List all consolidated traces.
+List all consolidated engrams.
 
-#### `GET /v1/traces/{id}?level=1`
+#### `GET /v1/engrams/{id}?level=1`
 
-Get a trace by full ID or 5-char short ID.
+Get an engram by full ID or 5-char short ID.
 
 Query param `level` controls summary compression:
-- `0` — raw trace, no summary override
+- `0` — raw engram, no summary override
 - `1` — L1 summary (default, concise)
 - `2` — L2 summary (more compressed)
 
-#### `GET /v1/traces/{id}/context`
+#### `GET /v1/engrams/{id}/context`
 
-Get a trace with its source episodes and linked entities.
+Get an engram with its source episodes and linked entities.
 
 Response:
 ```json
 {
-  "trace": {...},
+  "engram": {...},
   "source_episodes": [...],
   "linked_entities": [{"id": "ent-...", "name": "Alice", "type": "PERSON"}]
 }
 ```
 
-#### `POST /v1/traces/{id}/reinforce`
+#### `POST /v1/engrams/{id}/reinforce`
 
-Boost a trace's activation (simulates memory reconsolidation).
+Boost an engram's activation (simulates memory reconsolidation).
 
 Request (all optional):
 ```json
@@ -352,7 +352,7 @@ Query params:
 
 #### `POST /v1/activation/decay`
 
-Apply exponential decay to all trace activations. Run periodically to implement forgetting.
+Apply exponential decay to all engram activations. Run periodically to implement forgetting.
 
 Request (all optional):
 ```json
@@ -372,7 +372,7 @@ Trigger consolidation and cleanup. Equivalent to `POST /v1/consolidate`.
 
 #### `DELETE /v1/memory/reset`
 
-**Destructive.** Clears all episodes, entities, traces, and edges. Cannot be undone.
+**Destructive.** Clears all episodes, entities, engrams, and edges. Cannot be undone.
 
 ---
 
@@ -390,10 +390,10 @@ When `ENGRAM_MCP=1`, Engram serves MCP over stdio (for Claude Desktop / claude-c
 
 | Tool | Description |
 |------|-------------|
-| `search_memory` | Semantic search over traces and episodes |
-| `list_traces` | List all consolidated memory traces |
-| `get_trace` | Get a trace by ID with configurable compression level |
-| `get_trace_context` | Get a trace plus its source episodes and linked entities |
+| `search_memory` | Semantic search over engrams and episodes |
+| `list_engrams` | List all consolidated memory engrams |
+| `get_engram` | Get an engram by ID with configurable compression level |
+| `get_engram_context` | Get an engram plus its source episodes and linked entities |
 | `query_episode` | Get a raw episode by ID |
 
 ### Claude Desktop configuration
@@ -454,10 +454,10 @@ Background consolidation runs periodically (default: every 15 minutes):
 1. Fetches recent unconsolidated episodes
 2. Clusters them by semantic similarity (cosine distance threshold)
 3. Generates a summary for each cluster via LLM
-4. Creates or updates a **Trace** for each cluster
-5. Links traces to their source episodes and involved entities
+4. Creates or updates an **Engram** for each cluster
+5. Links engrams to their source episodes and involved entities
 
-Traces have two types:
+Engrams have two types:
 - `knowledge` — facts, decisions, preferences (long-lived, decays slowly)
 - `operational` — meeting reminders, state syncs, deploys (short-lived, decays faster)
 
@@ -466,10 +466,10 @@ Traces have two types:
 Retrieval (`POST /v1/search`):
 
 1. Embeds the query and runs FTS5 full-text search to find seed nodes
-2. Seeds spreading activation across the graph (episodes → entities → traces)
-3. Returns top-ranked traces, episodes, and entities by activation score
+2. Seeds spreading activation across the graph (episodes → entities → engrams)
+3. Returns top-ranked engrams, episodes, and entities by activation score
 
-This surfaces relevant memories even when they aren't directly matched by the query text — e.g., searching for "Alice" will also surface traces that mention Alice's team members.
+This surfaces relevant memories even when they aren't directly matched by the query text — e.g., searching for "Alice" will also surface engrams that mention Alice's team members.
 
 ---
 

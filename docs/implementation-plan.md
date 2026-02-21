@@ -6,6 +6,12 @@ Two changes land together since both touch the schema and all call sites:
 
 **Total scope:** ~15 files, ~40 function renames, 1 new dependency.
 
+## Status
+
+**Completed in commit `b753bb8`:** Steps 1–15 (all code changes, DB migration, tests pass)
+
+**Remaining:** Steps 16 (openapi.yaml — 31 trace refs), 17 (README.md — 23 trace refs)
+
 ---
 
 ## Preflight Notes (verified against codebase)
@@ -20,7 +26,7 @@ Two changes land together since both touch the schema and all call sites:
 
 ---
 
-## Step 1: Add BLAKE3 Dependency
+## ✅ Step 1: Add BLAKE3 Dependency
 
 Already done — `github.com/zeebo/blake3 v0.2.4` is present in `go.mod`. No action needed.
 
@@ -30,7 +36,7 @@ go get github.com/zeebo/blake3
 
 ---
 
-## Step 2: Create `internal/graph/id.go`
+## ✅ Step 2: Create `internal/graph/id.go`
 
 New file containing all ID generation and prefix resolution logic. Nothing else should generate IDs.
 
@@ -137,7 +143,7 @@ func nextHexPrefix(prefix string) string {
 
 ---
 
-## Step 3: Database Schema Migration (`internal/graph/db.go`)
+## ✅ Step 3: Database Schema Migration (`internal/graph/db.go`)
 
 Add a new migration (increment the current highest version, e.g. `v21`) that:
 
@@ -290,7 +296,7 @@ CREATE VIRTUAL TABLE engram_fts USING fts5(
 
 ---
 
-## Step 4: Rename `internal/graph/types.go`
+## ✅ Step 4: Rename `internal/graph/types.go`
 
 ### Changes
 
@@ -306,7 +312,7 @@ CREATE VIRTUAL TABLE engram_fts USING fts5(
 
 ---
 
-## Step 5: Rename `internal/graph/traces.go` → `engrams.go`
+## ✅ Step 5: Rename `internal/graph/traces.go` → `engrams.go`
 
 Rename file, then update all function signatures and SQL:
 
@@ -354,7 +360,7 @@ Rename file, then update all function signatures and SQL:
 
 ---
 
-## Step 6: Rename `internal/graph/episode_trace_edges.go` → `episode_engram_edges.go`
+## ✅ Step 6: Rename `internal/graph/episode_trace_edges.go` → `episode_engram_edges.go`
 
 | Old Name | New Name |
 |----------|----------|
@@ -366,7 +372,7 @@ All SQL queries: `episode_trace_edges` → `episode_engram_edges`, `trace_id` �
 
 ---
 
-## Step 7: Update `internal/graph/episodes.go`
+## ✅ Step 7: Update `internal/graph/episodes.go`
 
 - **Remove `generateShortID`** — delete the function entirely.
 - **Remove `ShortID` field usage** — remove all `ep.ShortID` assignments and `short_id` SQL column references from `AddEpisode`, `GetAllEpisodes`, `GetEpisode`, `GetEpisodeByShortID` (delete that function), `GetEpisodes`, `GetRecentEpisodes`, `GetEpisodeReplies`, `scanEpisode`, `scanEpisodeRow`, `scanEpisodeRowNoEmbedding`.
@@ -376,7 +382,7 @@ All SQL queries: `episode_trace_edges` → `episode_engram_edges`, `trace_id` �
 
 ---
 
-## Step 8: Update `internal/graph/activation.go`
+## ✅ Step 8: Update `internal/graph/activation.go`
 
 All spreading activation logic references `traces`. Update:
 
@@ -389,14 +395,14 @@ This file is the largest trace consumer (~1,047 lines). Do a careful search-repl
 
 ---
 
-## Step 9: Update `internal/graph/entities.go`
+## ✅ Step 9: Update `internal/graph/entities.go`
 
 - Any query that joins to `traces` or `trace_entities` → update to `engrams` / `engram_entities`
 - Return types or structs that embed trace data
 
 ---
 
-## Step 10: Update `internal/consolidate/consolidate.go` (and related)
+## ✅ Step 10: Update `internal/consolidate/consolidate.go` (and related)
 
 The consolidation pipeline creates traces. Update:
 
@@ -409,7 +415,7 @@ The consolidation pipeline creates traces. Update:
 
 ---
 
-## Step 11: Update `internal/api/router.go`
+## ✅ Step 11: Update `internal/api/router.go`
 
 Route changes:
 
@@ -425,7 +431,7 @@ Update handler references to match new names from step 12.
 
 ---
 
-## Step 12: Update `internal/api/handlers.go`
+## ✅ Step 12: Update `internal/api/handlers.go`
 
 Handler function renames and JSON key changes:
 
@@ -464,7 +470,7 @@ Remove the `github.com/google/uuid` import if it's no longer used after this cha
 
 ---
 
-## Step 13: Update `internal/mcp/server.go`
+## ✅ Step 13: Update `internal/mcp/server.go`
 
 Tool definition renames:
 
@@ -481,13 +487,13 @@ Parameter names inside tools:
 
 ---
 
-## Step 14: Update `cmd/engram/main.go`
+## ✅ Step 14: Update `cmd/engram/main.go`
 
 Check for any trace-specific startup logic, initialization calls, or log messages. Update as needed.
 
 ---
 
-## Step 15: Update Tests
+## ✅ Step 15: Update Tests
 
 ### `internal/graph/graph_test.go`
 - All `AddTrace` → `AddEngram`
@@ -511,7 +517,7 @@ Check for any trace-specific startup logic, initialization calls, or log message
 
 ---
 
-## Step 16: Update `openapi.yaml`
+## ⬜ Step 16: Update `openapi.yaml`
 
 - Rename all `/v1/traces` paths to `/v1/engrams`
 - Rename `Trace` schema → `Engram`
@@ -521,7 +527,7 @@ Check for any trace-specific startup logic, initialization calls, or log message
 
 ---
 
-## Step 17: Update `README.md` and other docs
+## ⬜ Step 17: Update `README.md` and other docs
 
 - Replace "trace" with "engram" in conceptual descriptions
 - Update curl examples to use `/v1/engrams`
@@ -529,7 +535,7 @@ Check for any trace-specific startup logic, initialization calls, or log message
 
 ---
 
-## Step 18: Build and Verify
+## ✅ Step 18: Build and Verify
 
 ```bash
 make build     # must produce zero errors, zero warnings about undefined symbols

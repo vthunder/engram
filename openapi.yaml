@@ -7,7 +7,7 @@ info:
     Engram stores memories as a three-tier graph:
     - **Episodes** (Tier 1): Raw ingested messages and events
     - **Entities** (Tier 2): Named entities extracted from episodes
-    - **Traces** (Tier 3): Consolidated memories built from episode clusters
+    - **Engrams** (Tier 3): Consolidated memories built from episode clusters
 
     All `/v1/*` endpoints require Bearer token authentication.
     The `/health` endpoint is public.
@@ -115,7 +115,7 @@ components:
           type: string
           format: date-time
 
-    Trace:
+    Engram:
       type: object
       properties:
         id:
@@ -130,8 +130,8 @@ components:
           description: Consolidated summary of source episodes
         topic:
           type: string
-        trace_type:
-          $ref: "#/components/schemas/TraceType"
+        engram_type:
+          $ref: "#/components/schemas/EngramType"
         activation:
           type: number
           format: double
@@ -154,7 +154,7 @@ components:
         labile_until:
           type: string
           format: date-time
-          description: If set, trace is in reconsolidation window until this time
+          description: If set, engram is in reconsolidation window until this time
         source_ids:
           type: array
           items:
@@ -166,7 +166,7 @@ components:
             type: string
           description: IDs of linked entities (populated on retrieval)
 
-    TraceType:
+    EngramType:
       type: string
       enum:
         - knowledge
@@ -205,10 +205,10 @@ components:
     RetrievalResult:
       type: object
       properties:
-        traces:
+        engrams:
           type: array
           items:
-            $ref: "#/components/schemas/Trace"
+            $ref: "#/components/schemas/Engram"
         episodes:
           type: array
           items:
@@ -218,11 +218,11 @@ components:
           items:
             $ref: "#/components/schemas/Entity"
 
-    TraceContextResponse:
+    EngramContextResponse:
       type: object
       properties:
-        trace:
-          $ref: "#/components/schemas/Trace"
+        engram:
+          $ref: "#/components/schemas/Engram"
         source_episodes:
           type: array
           items:
@@ -392,7 +392,7 @@ paths:
       summary: Trigger consolidation
       description: |
         Run the consolidation pipeline: clusters recent episodes by semantic
-        similarity, generates summaries, and promotes them to traces.
+        similarity, generates summaries, and promotes them to engrams.
         Returns 503 if no consolidation service is configured.
       operationId: consolidate
       tags:
@@ -405,7 +405,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  traces_created:
+                  engrams_created:
                     type: integer
                   duration_ms:
                     type: integer
@@ -428,7 +428,7 @@ paths:
       summary: Search memory
       description: |
         Retrieve relevant memories using hybrid search (semantic vector similarity
-        + spreading activation). Returns a mix of traces, episodes, and entities
+        + spreading activation). Returns a mix of engrams, episodes, and entities
         ranked by relevance.
       operationId: search
       tags:
@@ -469,22 +469,22 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /v1/traces:
+  /v1/engrams:
     get:
-      summary: List all traces
-      description: Returns all consolidated memory traces ordered by last accessed time.
-      operationId: listTraces
+      summary: List all engrams
+      description: Returns all consolidated memory engrams ordered by last accessed time.
+      operationId: listEngrams
       tags:
-        - Traces
+        - Engrams
       responses:
         "200":
-          description: List of traces
+          description: List of engrams
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/Trace"
+                  $ref: "#/components/schemas/Engram"
         "500":
           description: Database error
           content:
@@ -492,23 +492,23 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /v1/traces/{id}:
+  /v1/engrams/{id}:
     get:
-      summary: Get a trace
+      summary: Get an engram
       description: |
-        Retrieve a single trace by its full ID or 5-character short ID.
-        By default returns with L1 summary. Set `level=0` for raw trace
+        Retrieve a single engram by its full ID or 5-character short ID.
+        By default returns with L1 summary. Set `level=0` for raw engram
         without summary, or `level=2` for L2 compressed summary.
-      operationId: getTrace
+      operationId: getEngram
       tags:
-        - Traces
+        - Engrams
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
-          description: Full trace ID or 5-char short ID
+          description: Full engram ID or 5-char short ID
         - name: level
           in: query
           schema:
@@ -519,65 +519,65 @@ paths:
           description: Summary compression level (0=raw, 1=L1, 2=L2)
       responses:
         "200":
-          description: Trace object
+          description: Engram object
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Trace"
+                $ref: "#/components/schemas/Engram"
         "404":
-          description: Trace not found
+          description: Engram not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /v1/traces/{id}/context:
+  /v1/engrams/{id}/context:
     get:
-      summary: Get trace with full context
+      summary: Get engram with full context
       description: |
-        Returns the trace along with its source episodes and linked entities.
-        Useful for understanding what the trace was derived from.
-      operationId: getTraceContext
+        Returns the engram along with its source episodes and linked entities.
+        Useful for understanding what the engram was derived from.
+      operationId: getEngramContext
       tags:
-        - Traces
+        - Engrams
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
-          description: Full trace ID or 5-char short ID
+          description: Full engram ID or 5-char short ID
       responses:
         "200":
-          description: Trace with source episodes and entities
+          description: Engram with source episodes and entities
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TraceContextResponse"
+                $ref: "#/components/schemas/EngramContextResponse"
         "404":
-          description: Trace not found
+          description: Engram not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /v1/traces/{id}/reinforce:
+  /v1/engrams/{id}/reinforce:
     post:
-      summary: Reinforce a trace
+      summary: Reinforce an engram
       description: |
-        Boost the activation of a trace, simulating memory reconsolidation.
+        Boost the activation of an engram, simulating memory reconsolidation.
         Increases strength counter and resets the labile window.
-        Optionally provide an updated embedding to shift the trace's semantic center.
-      operationId: reinforceTrace
+        Optionally provide an updated embedding to shift the engram's semantic center.
+      operationId: reinforceEngram
       tags:
-        - Traces
+        - Engrams
       parameters:
         - name: id
           in: path
           required: true
           schema:
             type: string
-          description: Full trace ID or 5-char short ID
+          description: Full engram ID or 5-char short ID
       requestBody:
         content:
           application/json:
@@ -589,7 +589,7 @@ paths:
                   items:
                     type: number
                     format: double
-                  description: Updated embedding for the trace
+                  description: Updated embedding for the engram
                 alpha:
                   type: number
                   format: double
@@ -597,7 +597,7 @@ paths:
                   default: 0.3
       responses:
         "200":
-          description: Trace reinforced
+          description: Engram reinforced
           content:
             application/json:
               schema:
@@ -681,8 +681,8 @@ paths:
     post:
       summary: Decay activation
       description: |
-        Apply exponential decay to all trace activation levels.
-        Older, less-accessed traces lose activation faster.
+        Apply exponential decay to all engram activation levels.
+        Older, less-accessed engrams lose activation faster.
         Useful to run periodically to implement memory forgetting.
       operationId: decayActivation
       tags:
@@ -711,7 +711,7 @@ paths:
                 properties:
                   updated:
                     type: integer
-                    description: Number of traces whose activation was updated
+                    description: Number of engrams whose activation was updated
         "500":
           description: Database error
           content:
@@ -744,7 +744,7 @@ paths:
     delete:
       summary: Reset memory
       description: |
-        **Destructive.** Clears all episodes, entities, traces, and edges from the graph.
+        **Destructive.** Clears all episodes, entities, engrams, and edges from the graph.
         Cannot be undone. Useful for testing.
       operationId: resetMemory
       tags:
@@ -776,7 +776,7 @@ tags:
     description: Run the consolidation pipeline
   - name: Search
     description: Retrieve memories by semantic similarity
-  - name: Traces
+  - name: Engrams
     description: Access consolidated memories (Tier 3)
   - name: Episodes
     description: Access raw episode memories (Tier 1)
