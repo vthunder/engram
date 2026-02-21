@@ -1,0 +1,788 @@
+openapi: "3.0.3"
+info:
+  title: Engram Memory API
+  description: |
+    HTTP API for the Engram memory graph system.
+
+    Engram stores memories as a three-tier graph:
+    - **Episodes** (Tier 1): Raw ingested messages and events
+    - **Entities** (Tier 2): Named entities extracted from episodes
+    - **Traces** (Tier 3): Consolidated memories built from episode clusters
+
+    All `/v1/*` endpoints require Bearer token authentication.
+    The `/health` endpoint is public.
+  version: "0.1.0"
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API key passed as Bearer token
+
+  schemas:
+    Episode:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "ep-550e8400-e29b-41d4-a716-446655440000"
+        short_id:
+          type: string
+          description: First 5 chars of BLAKE3 hash, for display
+          example: "a3f2b"
+        content:
+          type: string
+        token_count:
+          type: integer
+          description: Pre-computed token count
+        source:
+          type: string
+          example: "discord"
+        author:
+          type: string
+        author_id:
+          type: string
+        channel:
+          type: string
+        timestamp_event:
+          type: string
+          format: date-time
+          description: When the event occurred
+        timestamp_ingested:
+          type: string
+          format: date-time
+          description: When the episode was stored
+        dialogue_act:
+          type: string
+        entropy_score:
+          type: number
+          format: double
+        embedding:
+          type: array
+          items:
+            type: number
+            format: double
+          description: Vector embedding (omitted by default)
+        reply_to:
+          type: string
+          description: ID of episode this replies to
+        authorization_checked:
+          type: boolean
+        has_authorization:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    Entity:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "ent-550e8400-e29b-41d4-a716-446655440000"
+        name:
+          type: string
+          example: "Alice"
+        type:
+          $ref: "#/components/schemas/EntityType"
+        salience:
+          type: number
+          format: double
+        embedding:
+          type: array
+          items:
+            type: number
+            format: double
+          description: Vector embedding (omitted by default)
+        aliases:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Trace:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "tr-550e8400-e29b-41d4-a716-446655440000"
+        short_id:
+          type: string
+          description: First 5 chars of BLAKE3 hash, for display
+          example: "c9d4e"
+        summary:
+          type: string
+          description: Consolidated summary of source episodes
+        topic:
+          type: string
+        trace_type:
+          $ref: "#/components/schemas/TraceType"
+        activation:
+          type: number
+          format: double
+          description: Current activation level (0.0–1.0)
+        strength:
+          type: integer
+          description: Number of reinforcements
+        embedding:
+          type: array
+          items:
+            type: number
+            format: double
+          description: Vector embedding (omitted by default)
+        created_at:
+          type: string
+          format: date-time
+        last_accessed:
+          type: string
+          format: date-time
+        labile_until:
+          type: string
+          format: date-time
+          description: If set, trace is in reconsolidation window until this time
+        source_ids:
+          type: array
+          items:
+            type: string
+          description: IDs of source episodes (populated on retrieval)
+        entity_ids:
+          type: array
+          items:
+            type: string
+          description: IDs of linked entities (populated on retrieval)
+
+    TraceType:
+      type: string
+      enum:
+        - knowledge
+        - operational
+      description: |
+        - `knowledge`: Facts, decisions, preferences — long-lived
+        - `operational`: Meeting reminders, state syncs, deploys — short-lived
+
+    EntityType:
+      type: string
+      enum:
+        - PERSON
+        - ORG
+        - GPE
+        - LOC
+        - FAC
+        - PRODUCT
+        - EVENT
+        - WORK_OF_ART
+        - LAW
+        - LANGUAGE
+        - NORP
+        - DATE
+        - TIME
+        - MONEY
+        - PERCENT
+        - QUANTITY
+        - CARDINAL
+        - ORDINAL
+        - EMAIL
+        - PET
+        - TECHNOLOGY
+        - OTHER
+      description: OntoNotes-compatible entity type with custom extensions
+
+    RetrievalResult:
+      type: object
+      properties:
+        traces:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trace"
+        episodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Episode"
+        entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entity"
+
+    TraceContextResponse:
+      type: object
+      properties:
+        trace:
+          $ref: "#/components/schemas/Trace"
+        source_episodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Episode"
+        linked_entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entity"
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - code
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+          example: "missing_field"
+
+paths:
+
+  /health:
+    get:
+      summary: Health check
+      description: Returns server status. No authentication required.
+      security: []
+      operationId: getHealth
+      tags:
+        - Health
+      responses:
+        "200":
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+                  time:
+                    type: string
+                    format: date-time
+
+  /v1/episodes:
+    post:
+      summary: Ingest an episode
+      description: |
+        Store a raw episode (message, event, observation) in the memory graph.
+
+        If `embedding` is not provided and an embed service is configured,
+        the embedding is computed automatically. Named entities are extracted
+        in the background if a NER service is configured.
+      operationId: ingestEpisode
+      tags:
+        - Ingest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - content
+                - source
+              properties:
+                content:
+                  type: string
+                  description: The episode text content
+                source:
+                  type: string
+                  description: Origin source identifier (e.g. "discord", "calendar")
+                  example: "discord"
+                author:
+                  type: string
+                author_id:
+                  type: string
+                channel:
+                  type: string
+                timestamp_event:
+                  type: string
+                  format: date-time
+                  description: When the event occurred; defaults to now if omitted
+                reply_to:
+                  type: string
+                  description: ID of the episode this is a reply to
+                embedding:
+                  type: array
+                  items:
+                    type: number
+                    format: double
+                  description: Pre-computed embedding; computed automatically if omitted
+      responses:
+        "201":
+          description: Episode stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  short_id:
+                    type: string
+        "400":
+          description: Missing required field or malformed JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/thoughts:
+    post:
+      summary: Ingest a thought
+      description: |
+        Store a free-form thought or observation. Shorthand for ingesting
+        an episode with `source: "thought"` — no source or author metadata required.
+      operationId: ingestThought
+      tags:
+        - Ingest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - content
+              properties:
+                content:
+                  type: string
+      responses:
+        "201":
+          description: Thought stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+        "400":
+          description: Missing content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/consolidate:
+    post:
+      summary: Trigger consolidation
+      description: |
+        Run the consolidation pipeline: clusters recent episodes by semantic
+        similarity, generates summaries, and promotes them to traces.
+        Returns 503 if no consolidation service is configured.
+      operationId: consolidate
+      tags:
+        - Consolidation
+      responses:
+        "200":
+          description: Consolidation complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  traces_created:
+                    type: integer
+                  duration_ms:
+                    type: integer
+                    format: int64
+        "500":
+          description: Consolidation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Consolidation not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/search:
+    post:
+      summary: Search memory
+      description: |
+        Retrieve relevant memories using hybrid search (semantic vector similarity
+        + spreading activation). Returns a mix of traces, episodes, and entities
+        ranked by relevance.
+      operationId: search
+      tags:
+        - Search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Natural language search query
+                limit:
+                  type: integer
+                  description: Maximum number of results to return
+                  default: 10
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetrievalResult"
+        "400":
+          description: Missing query
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Retrieval error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/traces:
+    get:
+      summary: List all traces
+      description: Returns all consolidated memory traces ordered by last accessed time.
+      operationId: listTraces
+      tags:
+        - Traces
+      responses:
+        "200":
+          description: List of traces
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Trace"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/traces/{id}:
+    get:
+      summary: Get a trace
+      description: |
+        Retrieve a single trace by its full ID or 5-character short ID.
+        By default returns with L1 summary. Set `level=0` for raw trace
+        without summary, or `level=2` for L2 compressed summary.
+      operationId: getTrace
+      tags:
+        - Traces
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full trace ID or 5-char short ID
+        - name: level
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 0
+            maximum: 2
+          description: Summary compression level (0=raw, 1=L1, 2=L2)
+      responses:
+        "200":
+          description: Trace object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trace"
+        "404":
+          description: Trace not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/traces/{id}/context:
+    get:
+      summary: Get trace with full context
+      description: |
+        Returns the trace along with its source episodes and linked entities.
+        Useful for understanding what the trace was derived from.
+      operationId: getTraceContext
+      tags:
+        - Traces
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full trace ID or 5-char short ID
+      responses:
+        "200":
+          description: Trace with source episodes and entities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TraceContextResponse"
+        "404":
+          description: Trace not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/traces/{id}/reinforce:
+    post:
+      summary: Reinforce a trace
+      description: |
+        Boost the activation of a trace, simulating memory reconsolidation.
+        Increases strength counter and resets the labile window.
+        Optionally provide an updated embedding to shift the trace's semantic center.
+      operationId: reinforceTrace
+      tags:
+        - Traces
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full trace ID or 5-char short ID
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                embedding:
+                  type: array
+                  items:
+                    type: number
+                    format: double
+                  description: Updated embedding for the trace
+                alpha:
+                  type: number
+                  format: double
+                  description: Reinforcement strength (0.0–1.0)
+                  default: 0.3
+      responses:
+        "200":
+          description: Trace reinforced
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/episodes/{id}:
+    get:
+      summary: Get an episode
+      description: Retrieve a single episode by its full ID or 5-character short ID.
+      operationId: getEpisode
+      tags:
+        - Episodes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full episode ID or 5-char short ID
+      responses:
+        "200":
+          description: Episode object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Episode"
+        "404":
+          description: Episode not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/entities:
+    get:
+      summary: List entities
+      description: |
+        List extracted named entities. Optionally filter by entity type.
+      operationId: listEntities
+      tags:
+        - Entities
+      parameters:
+        - name: type
+          in: query
+          schema:
+            $ref: "#/components/schemas/EntityType"
+          description: Filter by entity type
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+          description: Maximum number of entities to return
+      responses:
+        "200":
+          description: List of entities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Entity"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/activation/decay:
+    post:
+      summary: Decay activation
+      description: |
+        Apply exponential decay to all trace activation levels.
+        Older, less-accessed traces lose activation faster.
+        Useful to run periodically to implement memory forgetting.
+      operationId: decayActivation
+      tags:
+        - Activation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lambda:
+                  type: number
+                  format: double
+                  description: Decay rate (higher = faster decay). Uses server default if omitted.
+                floor:
+                  type: number
+                  format: double
+                  description: Minimum activation floor. Uses server default if omitted.
+      responses:
+        "200":
+          description: Decay applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated:
+                    type: integer
+                    description: Number of traces whose activation was updated
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/memory/flush:
+    post:
+      summary: Flush memory
+      description: |
+        Trigger consolidation and any pending cleanup. Equivalent to manually
+        running consolidation. Useful before shutdown or testing.
+      operationId: flushMemory
+      tags:
+        - Management
+      responses:
+        "200":
+          description: Flush complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+
+  /v1/memory/reset:
+    delete:
+      summary: Reset memory
+      description: |
+        **Destructive.** Clears all episodes, entities, traces, and edges from the graph.
+        Cannot be undone. Useful for testing.
+      operationId: resetMemory
+      tags:
+        - Management
+      responses:
+        "200":
+          description: Memory cleared
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        "500":
+          description: Reset error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+tags:
+  - name: Health
+    description: Health check endpoint
+  - name: Ingest
+    description: Store new episodes and thoughts
+  - name: Consolidation
+    description: Run the consolidation pipeline
+  - name: Search
+    description: Retrieve memories by semantic similarity
+  - name: Traces
+    description: Access consolidated memories (Tier 3)
+  - name: Episodes
+    description: Access raw episode memories (Tier 1)
+  - name: Entities
+    description: Access extracted named entities (Tier 2)
+  - name: Activation
+    description: Manage memory activation and forgetting
+  - name: Management
+    description: System management operations
