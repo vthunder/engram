@@ -41,6 +41,7 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 		// Entities
 		r.Get("/v1/entities", svc.handleListEntities)
 		r.Get("/v1/entities/{id}", svc.handleGetEntity)
+		r.Get("/v1/entities/{id}/engrams", svc.handleGetEntityEngrams)
 
 		// Activation
 		r.Post("/v1/activation/decay", svc.handleDecayActivation)

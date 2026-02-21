@@ -48,6 +48,37 @@ func searchMemoryTool() mcpgo.Tool {
 	)
 }
 
+// nerEntityEngrams extracts named entities from queryStr via NER and returns engram IDs
+// linked to those entities, for extra-seeding spreading activation at retrieval time.
+func nerEntityEngrams(svc *Services, queryStr string) []string {
+	if svc.NERClient == nil || svc.Graph == nil {
+		return nil
+	}
+	resp, err := svc.NERClient.Extract(queryStr)
+	if err != nil || !resp.HasEntities {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var engramIDs []string
+	for _, e := range resp.Entities {
+		entity, err := svc.Graph.FindEntityByName(e.Text)
+		if err != nil || entity == nil {
+			continue
+		}
+		ids, err := svc.Graph.GetEngramsForEntitiesBatch([]string{entity.ID}, 3)
+		if err != nil {
+			continue
+		}
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				engramIDs = append(engramIDs, id)
+			}
+		}
+	}
+	return engramIDs
+}
+
 func searchMemoryHandler(svc *Services) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		query := req.GetString("query", "")
@@ -60,16 +91,30 @@ func searchMemoryHandler(svc *Services) server.ToolHandlerFunc {
 			limit = 10
 		}
 
-		var queryEmb []float64
+		// Run embedding and NER concurrently — both are network calls.
+		embCh := make(chan []float64, 1)
+		seedCh := make(chan []string, 1)
+
 		if svc.EmbedClient != nil {
-			var err error
-			queryEmb, err = svc.EmbedClient.Embed(query)
-			if err != nil {
-				svc.Logger.Warn("MCP: query embedding failed", "err", err)
-			}
+			go func() {
+				emb, err := svc.EmbedClient.Embed(query)
+				if err != nil {
+					svc.Logger.Warn("MCP: query embedding failed", "err", err)
+					embCh <- nil
+					return
+				}
+				embCh <- emb
+			}()
+		} else {
+			embCh <- nil
 		}
 
-		result, err := svc.Graph.Retrieve(queryEmb, query, limit)
+		go func() { seedCh <- nerEntityEngrams(svc, query) }()
+
+		queryEmb := <-embCh
+		extraSeeds := <-seedCh
+
+		result, err := svc.Graph.Retrieve(queryEmb, query, limit, extraSeeds...)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("retrieval failed: %v", err)), nil
 		}

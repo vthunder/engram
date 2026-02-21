@@ -176,7 +176,7 @@ func (g *DB) SpreadActivation(seedIDs []string, iterations int) (map[string]floa
 
 // SpreadActivationFromEmbedding spreads activation using dual-trigger seeding
 // Dual trigger: combines lexical matching (BM25-style) AND semantic embedding
-func (g *DB) SpreadActivationFromEmbedding(queryEmb []float64, queryText string, topK int, iterations int) (map[string]float64, error) {
+func (g *DB) SpreadActivationFromEmbedding(queryEmb []float64, queryText string, topK int, iterations int, extraSeeds ...string) (map[string]float64, error) {
 	// Run all 3 triggers concurrently — they're independent reads on WAL-mode SQLite.
 	type triggerResult struct {
 		ids      []string
@@ -249,6 +249,11 @@ func (g *DB) SpreadActivationFromEmbedding(queryEmb []float64, queryText string,
 		triggerDuration(triggerDurations[:], "lexical"),
 		triggerDuration(triggerDurations[:], "entity"))
 	stopTriggers()
+
+	// Merge caller-supplied seeds (e.g. NER-derived entity engrams from handler layer)
+	for _, id := range extraSeeds {
+		seedSet[id] = true
+	}
 
 	// Convert set to slice
 	seedIDs := make([]string, 0, len(seedSet))
@@ -572,12 +577,12 @@ func (g *DB) findSimilarEngramsAboveThresholdScan(queryEmb []float64, threshold 
 
 // Retrieve performs full memory retrieval with dual-trigger spreading activation
 // Uses both embedding similarity AND lexical matching for seeding
-func (g *DB) Retrieve(queryEmb []float64, queryText string, limit int) (*RetrievalResult, error) {
+func (g *DB) Retrieve(queryEmb []float64, queryText string, limit int, extraSeeds ...string) (*RetrievalResult, error) {
 	result := &RetrievalResult{}
 
 	// Spread activation using dual triggers (semantic + lexical)
 	stopActivation := func() {}
-	activation, err := g.SpreadActivationFromEmbedding(queryEmb, queryText, 20, DefaultIters)
+	activation, err := g.SpreadActivationFromEmbedding(queryEmb, queryText, 20, DefaultIters, extraSeeds...)
 	stopActivation()
 	if err != nil {
 		return nil, err

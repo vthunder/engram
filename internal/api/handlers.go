@@ -223,6 +223,29 @@ func (s *Services) handleIngestThought(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
+
+	// Extract and link entities in background if NER is available
+	if s.NERClient != nil {
+		go func() {
+			resp, err := s.NERClient.Extract(req.Content)
+			if err != nil || resp == nil {
+				return
+			}
+			for _, e := range resp.Entities {
+				entityID := "ent:" + e.Text
+				entity := &graph.Entity{
+					ID:   entityID,
+					Name: e.Text,
+					Type: graph.EntityType(e.Label),
+				}
+				if addErr := s.Graph.AddEntity(entity); addErr != nil {
+					continue
+				}
+				_ = s.Graph.LinkEpisodeToEntity(id, entity.ID)
+			}
+		}()
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]string{"id": ep.ID})
 }
 
@@ -247,6 +270,37 @@ func (s *Services) handleConsolidate(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// nerEntityEngrams extracts named entities from queryStr via NER and returns engram IDs
+// linked to those entities, for extra-seeding spreading activation at retrieval time.
+func (s *Services) nerEntityEngrams(queryStr string) []string {
+	if s.NERClient == nil || s.Graph == nil {
+		return nil
+	}
+	resp, err := s.NERClient.Extract(queryStr)
+	if err != nil || !resp.HasEntities {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var engramIDs []string
+	for _, e := range resp.Entities {
+		entity, err := s.Graph.FindEntityByName(e.Text)
+		if err != nil || entity == nil {
+			continue
+		}
+		ids, err := s.Graph.GetEngramsForEntitiesBatch([]string{entity.ID}, 3)
+		if err != nil {
+			continue
+		}
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				engramIDs = append(engramIDs, id)
+			}
+		}
+	}
+	return engramIDs
+}
+
 // --- Engrams ---
 
 func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
@@ -257,15 +311,31 @@ func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 	// Semantic search path
 	if queryStr != "" {
 		limit := parseLimit(r, 10)
-		var queryEmb []float64
+
+		// Run embedding and NER concurrently — both are network calls.
+		embCh := make(chan []float64, 1)
+		seedCh := make(chan []string, 1)
+
 		if s.EmbedClient != nil {
-			var err error
-			queryEmb, err = s.EmbedClient.Embed(queryStr)
-			if err != nil {
-				s.Logger.Warn("query embedding failed", "err", err)
-			}
+			go func() {
+				emb, err := s.EmbedClient.Embed(queryStr)
+				if err != nil {
+					s.Logger.Warn("query embedding failed", "err", err)
+					embCh <- nil
+					return
+				}
+				embCh <- emb
+			}()
+		} else {
+			embCh <- nil
 		}
-		result, err := s.Graph.Retrieve(queryEmb, queryStr, limit)
+
+		go func() { seedCh <- s.nerEntityEngrams(queryStr) }()
+
+		queryEmb := <-embCh
+		extraSeeds := <-seedCh
+
+		result, err := s.Graph.Retrieve(queryEmb, queryStr, limit, extraSeeds...)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "retrieval_error", err.Error())
 			return
@@ -609,6 +679,34 @@ func (s *Services) handleGetEntity(w http.ResponseWriter, r *http.Request) {
 	} else {
 		writeJSON(w, http.StatusOK, entityCard(entity))
 	}
+}
+
+func (s *Services) handleGetEntityEngrams(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	engramIDs, err := s.Graph.GetEngramsForEntity(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	if len(engramIDs) == 0 {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+
+	engramMap, err := s.Graph.GetEngramsBatch(engramIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	engrams := make([]*graph.Engram, 0, len(engramMap))
+	for _, e := range engramMap {
+		engrams = append(engrams, e)
+	}
+
+	writeEngramList(w, engrams, parseDetail(r))
 }
 
 // --- Activation ---
