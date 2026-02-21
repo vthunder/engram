@@ -30,10 +30,11 @@ type StorageConfig struct {
 }
 
 type LLMConfig struct {
-	Provider string `yaml:"provider"` // "anthropic" | "ollama"
-	Model    string `yaml:"model"`
-	APIKey   string `yaml:"api_key"`
-	BaseURL  string `yaml:"base_url"` // for Ollama
+	Provider   string `yaml:"provider"`    // "anthropic" | "ollama" | "claude-code"
+	Model      string `yaml:"model"`
+	APIKey     string `yaml:"api_key"`
+	BaseURL    string `yaml:"base_url"`    // for Ollama
+	BinaryPath string `yaml:"binary_path"` // for claude-code: path to claude CLI (default: "claude")
 }
 
 type EmbeddingConfig struct {
@@ -127,6 +128,9 @@ func applyEnv(cfg *Config) {
 	if v := env("ENGRAM_LLM_BASE_URL"); v != "" {
 		cfg.LLM.BaseURL = v
 	}
+	if v := env("ENGRAM_LLM_BINARY_PATH"); v != "" {
+		cfg.LLM.BinaryPath = v
+	}
 	if v := env("ENGRAM_EMBEDDING_BASE_URL"); v != "" {
 		cfg.Embedding.BaseURL = v
 	}
@@ -152,8 +156,8 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("invalid server.port: %d", cfg.Server.Port)
 	}
 	provider := strings.ToLower(cfg.LLM.Provider)
-	if provider != "anthropic" && provider != "ollama" {
-		return fmt.Errorf("invalid llm.provider %q: must be \"anthropic\" or \"ollama\"", cfg.LLM.Provider)
+	if provider != "anthropic" && provider != "ollama" && provider != "claude-code" {
+		return fmt.Errorf("invalid llm.provider %q: must be \"anthropic\", \"ollama\", or \"claude-code\"", cfg.LLM.Provider)
 	}
 	nerProvider := strings.ToLower(cfg.NER.Provider)
 	if nerProvider != "spacy" && nerProvider != "ollama" {

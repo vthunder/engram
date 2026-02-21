@@ -24,7 +24,10 @@ The retrieval algorithm uses **spreading activation**: a dual-trigger seed (sema
 
 - Go 1.24+
 - [Ollama](https://ollama.ai) (for embeddings and optional NER)
-- An Anthropic API key (for consolidation via Claude), or Ollama as LLM
+- One of the following for consolidation:
+  - An Anthropic API key (direct API), **or**
+  - [Claude Code](https://claude.ai/code) CLI installed (`claude` on PATH) — lets you use your existing Claude subscription without a separate API key, **or**
+  - Ollama as a fully local LLM alternative
 
 ### Install
 
@@ -42,6 +45,7 @@ go build -o engram ./cmd/engram
 
 ### Configure
 
+**Option A: Anthropic API key**
 ```yaml
 # engram.yaml
 server:
@@ -52,7 +56,7 @@ storage:
   path: "./engram.db"
 
 llm:
-  provider: "anthropic"       # or "ollama"
+  provider: "anthropic"
   model: "claude-sonnet-4-6"
   # api_key: "sk-ant-..."     # or set ANTHROPIC_API_KEY
 
@@ -69,14 +73,32 @@ consolidation:
   interval: "15m"
 ```
 
-### Run
+```bash
+ANTHROPIC_API_KEY=sk-ant-... ./engram --config engram.yaml
+```
+
+**Option B: Claude Code (subscription, no separate API key)**
+
+Requires [Claude Code](https://claude.ai/code) installed and logged in (`claude` on PATH).
+
+```yaml
+# engram.yaml
+llm:
+  provider: "claude-code"
+  model: "claude-sonnet-4-6"  # optional; omit to use Claude's default
+  # binary_path: "/usr/local/bin/claude"  # optional; defaults to "claude"
+```
 
 ```bash
-# Using YAML config
-ANTHROPIC_API_KEY=sk-ant-... ./engram --config engram.yaml
+./engram --config engram.yaml
+```
 
-# Config auto-discovered if engram.yaml exists in current directory
-ANTHROPIC_API_KEY=sk-ant-... ./engram
+**Option C: Fully local (Ollama)**
+```yaml
+llm:
+  provider: "ollama"
+  model: "qwen2.5:7b"
+  base_url: "http://localhost:11434"
 ```
 
 Engram starts an HTTP server on port 8080 and runs background consolidation every 15 minutes.
@@ -102,10 +124,13 @@ Engram starts an HTTP server on port 8080 and runs background consolidation ever
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `provider` | `anthropic` | LLM provider: `anthropic` or `ollama` |
+| `provider` | `anthropic` | LLM provider: `anthropic`, `ollama`, or `claude-code` |
 | `model` | `claude-sonnet-4-6` | Model name |
 | `api_key` | _(from env)_ | Anthropic API key (if provider=anthropic) |
 | `base_url` | _(none)_ | Ollama base URL (if provider=ollama) |
+| `binary_path` | `claude` | Path to Claude Code CLI binary (if provider=claude-code) |
+
+**`claude-code` provider:** Uses your existing Claude subscription via the `claude` CLI. No API key required — just install [Claude Code](https://claude.ai/code) and log in. The CLI must be on `PATH` (or specify `binary_path`).
 
 ### `embedding`
 
@@ -147,6 +172,7 @@ All config fields can be overridden with `ENGRAM_*` env vars:
 | `ENGRAM_LLM_API_KEY` | `llm.api_key` |
 | `ANTHROPIC_API_KEY` | `llm.api_key` (fallback) |
 | `ENGRAM_LLM_BASE_URL` | `llm.base_url` |
+| `ENGRAM_LLM_BINARY_PATH` | `llm.binary_path` (claude-code path) |
 | `ENGRAM_EMBEDDING_BASE_URL` | `embedding.base_url` |
 | `ENGRAM_EMBEDDING_MODEL` | `embedding.model` |
 | `ENGRAM_EMBEDDING_API_KEY` | `embedding.api_key` |

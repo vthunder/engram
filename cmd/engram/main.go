@@ -74,19 +74,28 @@ func main() {
 	var consolidator *consolidate.Consolidator
 	if cfg.Consolidation.Enabled {
 		var llmClient consolidate.LLMClient
+		var claudeInfer *consolidate.ClaudeInference
 		switch cfg.LLM.Provider {
 		case "anthropic":
 			if embedClient != nil {
 				llmClient = newAnthropicLLMClient(embedClient, cfg.LLM.APIKey, cfg.LLM.Model, logger)
 			}
+			claudeInfer = consolidate.NewClaudeInference(cfg.LLM.Model, cfg.LLM.APIKey, false)
 		case "ollama":
 			if embedClient != nil {
 				llmClient = embedClient // embed.Client satisfies LLMClient (Embed + Generate + Summarize)
 			}
+			claudeInfer = consolidate.NewClaudeInference(cfg.LLM.Model, cfg.LLM.APIKey, false)
+		case "claude-code":
+			ccc := consolidate.NewClaudeCodeClient(cfg.LLM.BinaryPath, cfg.LLM.Model, false)
+			if embedClient != nil {
+				llmClient = newClaudeCodeLLMClient(embedClient, ccc)
+			}
+			claudeInfer = consolidate.NewClaudeInferenceFromGenerator(ccc, false)
+			logger.Info("LLM backend: claude-code", "binary", cfg.LLM.BinaryPath)
 		}
 
 		if llmClient != nil {
-			claudeInfer := consolidate.NewClaudeInference(cfg.LLM.Model, cfg.LLM.APIKey, false)
 			consolidator = consolidate.NewConsolidator(db, llmClient, claudeInfer)
 			logger.Info("consolidation enabled", "interval", cfg.Consolidation.Interval)
 		} else {
@@ -207,4 +216,27 @@ func (a *anthropicLLMClient) Summarize(fragments []string) (string, error) {
 
 func (a *anthropicLLMClient) Generate(prompt string) (string, error) {
 	return a.anthropic.Generate(context.Background(), prompt)
+}
+
+// claudeCodeLLMClient satisfies consolidate.LLMClient using the claude CLI for generation
+// and the Ollama embed client for embeddings.
+type claudeCodeLLMClient struct {
+	embed *embed.Client
+	cc    *consolidate.ClaudeCodeClient
+}
+
+func newClaudeCodeLLMClient(embedClient *embed.Client, cc *consolidate.ClaudeCodeClient) consolidate.LLMClient {
+	return &claudeCodeLLMClient{embed: embedClient, cc: cc}
+}
+
+func (c *claudeCodeLLMClient) Embed(text string) ([]float64, error) {
+	return c.embed.Embed(text)
+}
+
+func (c *claudeCodeLLMClient) Summarize(fragments []string) (string, error) {
+	return c.embed.Summarize(fragments)
+}
+
+func (c *claudeCodeLLMClient) Generate(prompt string) (string, error) {
+	return c.cc.Generate(context.Background(), prompt)
 }

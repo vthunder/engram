@@ -108,7 +108,7 @@ func (c *AnthropicClient) Generate(ctx context.Context, prompt string) (string, 
 
 // ClaudeInference provides Claude-powered relationship inference during consolidation.
 type ClaudeInference struct {
-	client  *AnthropicClient
+	client  Generator
 	verbose bool
 }
 
@@ -116,6 +116,15 @@ type ClaudeInference struct {
 func NewClaudeInference(model, apiKey string, verbose bool) *ClaudeInference {
 	return &ClaudeInference{
 		client:  NewAnthropicClient(model, apiKey, verbose),
+		verbose: verbose,
+	}
+}
+
+// NewClaudeInferenceFromGenerator creates a ClaudeInference using any Generator backend.
+// Use this with ClaudeCodeClient to avoid needing an Anthropic API key.
+func NewClaudeInferenceFromGenerator(gen Generator, verbose bool) *ClaudeInference {
+	return &ClaudeInference{
+		client:  gen,
 		verbose: verbose,
 	}
 }
@@ -318,9 +327,12 @@ func extractJSON(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// GetTokenStats returns total token usage.
+// GetTokenStats returns total token usage (only available when using AnthropicClient).
 func (c *ClaudeInference) GetTokenStats() (inputTokens, outputTokens, cacheReadTokens, cacheCreateTokens, sessionCount int) {
-	return c.client.totalInputTokens, c.client.totalOutputTokens,
-		c.client.totalCacheReadTokens, c.client.totalCacheCreateTokens,
-		c.client.sessionCount
+	if ac, ok := c.client.(*AnthropicClient); ok {
+		return ac.totalInputTokens, ac.totalOutputTokens,
+			ac.totalCacheReadTokens, ac.totalCacheCreateTokens,
+			ac.sessionCount
+	}
+	return 0, 0, 0, 0, 0
 }
