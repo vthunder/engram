@@ -196,7 +196,10 @@ func (s *Services) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	for _, t := range result.Traces {
+		t.Embedding = nil
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"traces": result.Traces})
 }
 
 // --- Traces ---
