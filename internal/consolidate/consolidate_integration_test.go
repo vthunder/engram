@@ -70,9 +70,9 @@ func TestRunBasicConsolidation(t *testing.T) {
 
 	// Verify both episodes are now linked to a trace.
 	for _, id := range []string{ep1.ID, ep2.ID} {
-		traces, err := db.GetEpisodeTraces(id)
+		traces, err := db.GetEpisodeEngrams(id)
 		if err != nil {
-			t.Fatalf("GetEpisodeTraces(%s): %v", id, err)
+			t.Fatalf("GetEpisodeEngrams(%s): %v", id, err)
 		}
 		if len(traces) == 0 {
 			t.Errorf("Episode %s not linked to any trace after consolidation", id)
@@ -80,18 +80,18 @@ func TestRunBasicConsolidation(t *testing.T) {
 	}
 
 	// Verify at least one real trace exists.
-	all, err := db.GetAllTraces()
+	all, err := db.GetAllEngrams()
 	if err != nil {
-		t.Fatalf("GetAllTraces: %v", err)
+		t.Fatalf("GetAllEngrams: %v", err)
 	}
 	if len(all) == 0 {
 		t.Error("No traces found after consolidation")
 	}
 }
 
-// TestRunIsolatedEpisodesEachGetOwnTrace verifies that unconnected episodes
+// TestRunIsolatedEpisodesEachGetOwnEngram verifies that unconnected episodes
 // each produce their own trace when MinGroupSize=1.
-func TestRunIsolatedEpisodesEachGetOwnTrace(t *testing.T) {
+func TestRunIsolatedEpisodesEachGetOwnEngram(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -133,7 +133,7 @@ func TestRunIsolatedEpisodesEachGetOwnTrace(t *testing.T) {
 // TestRunEphemeralContentSkipped verifies that meeting countdown messages are
 // skipped and don't produce real traces.
 // Note: Run() may return a non-zero count even for skipped groups (it counts
-// groups processed, not traces created). We verify by checking GetAllTraces().
+// groups processed, not traces created). We verify by checking GetAllEngrams().
 func TestRunEphemeralContentSkipped(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -157,9 +157,9 @@ func TestRunEphemeralContentSkipped(t *testing.T) {
 	}
 
 	// No real traces should be created (ephemeral content is discarded).
-	all, err := db.GetAllTraces()
+	all, err := db.GetAllEngrams()
 	if err != nil {
-		t.Fatalf("GetAllTraces: %v", err)
+		t.Fatalf("GetAllEngrams: %v", err)
 	}
 	if len(all) != 0 {
 		t.Errorf("Expected 0 real traces after ephemeral content, got %d", len(all))
@@ -167,7 +167,7 @@ func TestRunEphemeralContentSkipped(t *testing.T) {
 }
 
 // TestRunLowInfoEpisodesSkipped verifies that backchannel-only groups don't
-// produce real traces. We verify by checking GetAllTraces() rather than the
+// produce real traces. We verify by checking GetAllEngrams() rather than the
 // Run() return value (which counts processed groups, not actual traces created).
 func TestRunLowInfoEpisodesSkipped(t *testing.T) {
 	db, cleanup := setupTestDB(t)
@@ -208,9 +208,9 @@ func TestRunLowInfoEpisodesSkipped(t *testing.T) {
 	}
 
 	// No real traces should be created for all-backchannel content.
-	all, err := db.GetAllTraces()
+	all, err := db.GetAllEngrams()
 	if err != nil {
-		t.Fatalf("GetAllTraces: %v", err)
+		t.Fatalf("GetAllEngrams: %v", err)
 	}
 	if len(all) != 0 {
 		t.Errorf("Expected 0 real traces for low-info group, got %d", len(all))
@@ -256,24 +256,24 @@ func TestRunIdempotent(t *testing.T) {
 	}
 
 	// Exactly 1 real trace should exist.
-	all, err := db.GetAllTraces()
+	all, err := db.GetAllEngrams()
 	if err != nil {
-		t.Fatalf("GetAllTraces: %v", err)
+		t.Fatalf("GetAllEngrams: %v", err)
 	}
-	realTraces := 0
+	realEngrams := 0
 	for _, tr := range all {
 		if tr.ID != "_ephemeral" {
-			realTraces++
+			realEngrams++
 		}
 	}
-	if realTraces != 1 {
-		t.Errorf("Expected exactly 1 real trace, got %d", realTraces)
+	if realEngrams != 1 {
+		t.Errorf("Expected exactly 1 real trace, got %d", realEngrams)
 	}
 }
 
-// TestRunOperationalTraceClassification verifies that state sync messages
+// TestRunOperationalEngramClassification verifies that state sync messages
 // are classified as operational traces (faster decay, excluded from knowledge retrieval).
-func TestRunOperationalTraceClassification(t *testing.T) {
+func TestRunOperationalEngramClassification(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -298,11 +298,11 @@ func TestRunOperationalTraceClassification(t *testing.T) {
 		t.Fatalf("Expected 1 trace, got %d", n)
 	}
 
-	all, err := db.GetAllTraces()
+	all, err := db.GetAllEngrams()
 	if err != nil {
-		t.Fatalf("GetAllTraces: %v", err)
+		t.Fatalf("GetAllEngrams: %v", err)
 	}
-	var created *graph.Trace
+	var created *graph.Engram
 	for _, tr := range all {
 		if tr.ID != "_ephemeral" {
 			created = tr
@@ -312,14 +312,14 @@ func TestRunOperationalTraceClassification(t *testing.T) {
 	if created == nil {
 		t.Fatal("No trace found")
 	}
-	if created.TraceType != graph.TraceTypeOperational {
-		t.Errorf("Expected TraceTypeOperational, got %q", created.TraceType)
+	if created.EngramType != graph.EngramTypeOperational {
+		t.Errorf("Expected EngramTypeOperational, got %q", created.EngramType)
 	}
 }
 
-// TestRunKnowledgeTraceClassification verifies that decision notes with
+// TestRunKnowledgeEngramClassification verifies that decision notes with
 // rationale are classified as knowledge traces.
-func TestRunKnowledgeTraceClassification(t *testing.T) {
+func TestRunKnowledgeEngramClassification(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -344,11 +344,11 @@ func TestRunKnowledgeTraceClassification(t *testing.T) {
 		t.Fatalf("Expected 1 trace, got %d", n)
 	}
 
-	all, err := db.GetAllTraces()
+	all, err := db.GetAllEngrams()
 	if err != nil {
-		t.Fatalf("GetAllTraces: %v", err)
+		t.Fatalf("GetAllEngrams: %v", err)
 	}
-	var created *graph.Trace
+	var created *graph.Engram
 	for _, tr := range all {
 		if tr.ID != "_ephemeral" {
 			created = tr
@@ -358,8 +358,8 @@ func TestRunKnowledgeTraceClassification(t *testing.T) {
 	if created == nil {
 		t.Fatal("No trace found")
 	}
-	if created.TraceType != graph.TraceTypeKnowledge {
-		t.Errorf("Expected TraceTypeKnowledge, got %q", created.TraceType)
+	if created.EngramType != graph.EngramTypeKnowledge {
+		t.Errorf("Expected EngramTypeKnowledge, got %q", created.EngramType)
 	}
 }
 
@@ -391,9 +391,9 @@ func TestRunMinGroupSizeFiltering(t *testing.T) {
 	}
 
 	// Episode should remain unconsolidated (not linked to any trace).
-	traces, err := db.GetEpisodeTraces(ep.ID)
+	traces, err := db.GetEpisodeEngrams(ep.ID)
 	if err != nil {
-		t.Fatalf("GetEpisodeTraces: %v", err)
+		t.Fatalf("GetEpisodeEngrams: %v", err)
 	}
 	if len(traces) != 0 {
 		t.Errorf("Expected episode to remain unconsolidated, but got traces: %v", traces)
@@ -462,9 +462,9 @@ func TestRunMultipleGroups(t *testing.T) {
 		t.Errorf("Expected 2 traces (two separate clusters), got %d", n)
 	}
 
-	all, err := db.GetAllTraces()
+	all, err := db.GetAllEngrams()
 	if err != nil {
-		t.Fatalf("GetAllTraces: %v", err)
+		t.Fatalf("GetAllEngrams: %v", err)
 	}
 	if len(all) != 2 {
 		t.Errorf("Expected 2 traces in DB, got %d", len(all))

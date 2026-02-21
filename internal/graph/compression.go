@@ -297,44 +297,33 @@ func max(a, b int) int {
 	return b
 }
 
-// TraceSummary represents a compressed version of a trace
-type TraceSummary struct {
+// EngramSummary represents a compressed version of an engram
+type EngramSummary struct {
 	ID               int    `json:"id"`
-	TraceID          string `json:"trace_id"`
+	EngramID         string `json:"engram_id"`
 	CompressionLevel int    `json:"compression_level"`
 	Summary          string `json:"summary"`
 	Tokens           int    `json:"tokens"`
 }
 
-// AddTraceSummary stores a summary for a trace at a given compression level
-func (g *DB) AddTraceSummary(traceID string, level int, summary string, tokens int) error {
-	_, err := g.db.Exec(`
-		INSERT OR REPLACE INTO trace_summaries (trace_id, compression_level, summary, tokens)
-		VALUES (?, ?, ?, ?)
-	`, traceID, level, summary, tokens)
+// DeleteAllEngramSummaries removes all engram summaries from the database
+func (g *DB) DeleteAllEngramSummaries() error {
+	_, err := g.db.Exec(`DELETE FROM engram_summaries`)
 	return err
 }
 
-// DeleteAllTraceSummaries removes all trace summaries from the database
-func (g *DB) DeleteAllTraceSummaries() error {
-	_, err := g.db.Exec(`DELETE FROM trace_summaries`)
-	return err
-}
-
-// GetTraceSummary retrieves a summary for a trace at a specific compression level
+// GetEngramSummary retrieves a summary for an engram at a specific compression level
 // Falls back to higher compression levels if the requested level doesn't exist
-// Returns nil if no summary exists
-func (g *DB) GetTraceSummary(traceID string, level int) (*TraceSummary, error) {
-	// Try requested level first, then higher levels
+func (g *DB) GetEngramSummary(engramID string, level int) (*EngramSummary, error) {
 	for lvl := level; lvl <= CompressionLevelMax; lvl++ {
-		var summary TraceSummary
+		var summary EngramSummary
 		err := g.db.QueryRow(`
-			SELECT id, trace_id, compression_level, summary, tokens
-			FROM trace_summaries
-			WHERE trace_id = ? AND compression_level = ?
-		`, traceID, lvl).Scan(
+			SELECT id, engram_id, compression_level, summary, tokens
+			FROM engram_summaries
+			WHERE engram_id = ? AND compression_level = ?
+		`, engramID, lvl).Scan(
 			&summary.ID,
-			&summary.TraceID,
+			&summary.EngramID,
 			&summary.CompressionLevel,
 			&summary.Summary,
 			&summary.Tokens,
@@ -343,19 +332,15 @@ func (g *DB) GetTraceSummary(traceID string, level int) (*TraceSummary, error) {
 			return &summary, nil
 		}
 	}
-	// No summary found at any compression level
 	return nil, nil
 }
 
-// GenerateTraceSummaryLevel generates a single compression level for a trace.
-// This is faster than GenerateTracePyramid when only one level is needed (e.g., during consolidation).
-// Use compress-traces to backfill the full pyramid later.
-func (g *DB) GenerateTraceSummaryLevel(traceID string, level int, sourceEpisodes []*Episode, compressor Compressor) error {
+// GenerateEngramSummaryLevel generates a single compression level for an engram.
+func (g *DB) GenerateEngramSummaryLevel(engramID string, level int, sourceEpisodes []*Episode, compressor Compressor) error {
 	if compressor == nil || len(sourceEpisodes) == 0 {
 		return fmt.Errorf("compressor and source episodes required")
 	}
 
-	// Build context from source episodes
 	var contextParts []string
 	for _, ep := range sourceEpisodes {
 		contextParts = append(contextParts, fmt.Sprintf("[%s] %s", ep.Author, ep.Content))
@@ -363,31 +348,27 @@ func (g *DB) GenerateTraceSummaryLevel(traceID string, level int, sourceEpisodes
 	sourceContext := strings.Join(contextParts, "\n")
 	wordCount := estimateWordCount(sourceContext)
 
-	// Determine target words for this level
-	targetWords := level // e.g., CompressionLevel8 = 8 words
+	targetWords := level
 
-	// Generate summary
 	summary, err := compressTraceToTarget(sourceContext, compressor, targetWords, wordCount)
 	if err != nil {
 		return fmt.Errorf("L%d compression failed: %w", level, err)
 	}
 
-	// Store summary
-	if err := g.AddTraceSummary(traceID, level, summary, estimateTokens(summary)); err != nil {
+	if err := g.AddEngramSummary(engramID, level, summary, estimateTokens(summary)); err != nil {
 		return fmt.Errorf("failed to store L%d summary: %w", level, err)
 	}
 
 	return nil
 }
 
-// GenerateTracePyramid creates cascading summaries (L64→L32→L16→L8→L4) for a trace
+// GenerateEngramPyramid creates cascading summaries (L64→L32→L16→L8→L4) for an engram
 // from its source episodes. Uses cascading approach for consistency.
-func (g *DB) GenerateTracePyramid(traceID string, sourceEpisodes []*Episode, compressor Compressor) error {
+func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, compressor Compressor) error {
 	if compressor == nil || len(sourceEpisodes) == 0 {
 		return fmt.Errorf("compressor and source episodes required")
 	}
 
-	// Build context from source episodes
 	var contextParts []string
 	for _, ep := range sourceEpisodes {
 		contextParts = append(contextParts, fmt.Sprintf("[%s] %s", ep.Author, ep.Content))
@@ -395,52 +376,47 @@ func (g *DB) GenerateTracePyramid(traceID string, sourceEpisodes []*Episode, com
 	sourceContext := strings.Join(contextParts, "\n")
 	wordCount := estimateWordCount(sourceContext)
 
-	// Generate L64 first (highest detail) from source episodes
 	l64Summary, err := compressTraceToTarget(sourceContext, compressor, 64, wordCount)
 	if err != nil {
 		return fmt.Errorf("L64 compression failed: %w", err)
 	}
-	if err := g.AddTraceSummary(traceID, CompressionLevel64, l64Summary, estimateTokens(l64Summary)); err != nil {
+	if err := g.AddEngramSummary(engramID, CompressionLevel64, l64Summary, estimateTokens(l64Summary)); err != nil {
 		return fmt.Errorf("failed to store L64 summary: %w", err)
 	}
 
-	// L32: cascade from L64
 	l64Words := estimateWordCount(l64Summary)
 	l32Summary, err := compressTraceToTarget(l64Summary, compressor, 32, l64Words)
 	if err != nil {
 		return fmt.Errorf("L32 compression failed: %w", err)
 	}
-	if err := g.AddTraceSummary(traceID, CompressionLevel32, l32Summary, estimateTokens(l32Summary)); err != nil {
+	if err := g.AddEngramSummary(engramID, CompressionLevel32, l32Summary, estimateTokens(l32Summary)); err != nil {
 		return fmt.Errorf("failed to store L32 summary: %w", err)
 	}
 
-	// L16: cascade from L32
 	l32Words := estimateWordCount(l32Summary)
 	l16Summary, err := compressTraceToTarget(l32Summary, compressor, 16, l32Words)
 	if err != nil {
 		return fmt.Errorf("L16 compression failed: %w", err)
 	}
-	if err := g.AddTraceSummary(traceID, CompressionLevel16, l16Summary, estimateTokens(l16Summary)); err != nil {
+	if err := g.AddEngramSummary(engramID, CompressionLevel16, l16Summary, estimateTokens(l16Summary)); err != nil {
 		return fmt.Errorf("failed to store L16 summary: %w", err)
 	}
 
-	// L8: cascade from L16
 	l16Words := estimateWordCount(l16Summary)
 	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16Words)
 	if err != nil {
 		return fmt.Errorf("L8 compression failed: %w", err)
 	}
-	if err := g.AddTraceSummary(traceID, CompressionLevel8, l8Summary, estimateTokens(l8Summary)); err != nil {
+	if err := g.AddEngramSummary(engramID, CompressionLevel8, l8Summary, estimateTokens(l8Summary)); err != nil {
 		return fmt.Errorf("failed to store L8 summary: %w", err)
 	}
 
-	// L4: cascade from L8
 	l8Words := estimateWordCount(l8Summary)
 	l4Summary, err := compressTraceToTarget(l8Summary, compressor, 4, l8Words)
 	if err != nil {
 		return fmt.Errorf("L4 compression failed: %w", err)
 	}
-	if err := g.AddTraceSummary(traceID, CompressionLevel4, l4Summary, estimateTokens(l4Summary)); err != nil {
+	if err := g.AddEngramSummary(engramID, CompressionLevel4, l4Summary, estimateTokens(l4Summary)); err != nil {
 		return fmt.Errorf("failed to store L4 summary: %w", err)
 	}
 

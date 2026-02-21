@@ -30,9 +30,9 @@ func NewServer(svc *Services) *server.MCPServer {
 	)
 
 	s.AddTool(searchMemoryTool(), searchMemoryHandler(svc))
-	s.AddTool(listTracesTool(), listTracesHandler(svc))
-	s.AddTool(getTraceTool(), getTraceHandler(svc))
-	s.AddTool(getTraceContextTool(), getTraceContextHandler(svc))
+	s.AddTool(listEngramsTool(), listEngramsHandler(svc))
+	s.AddTool(getEngramTool(), getEngramHandler(svc))
+	s.AddTool(getEngramContextTool(), getEngramContextHandler(svc))
 	s.AddTool(queryEpisodeTool(), queryEpisodeHandler(svc))
 
 	return s
@@ -42,7 +42,7 @@ func NewServer(svc *Services) *server.MCPServer {
 
 func searchMemoryTool() mcpgo.Tool {
 	return mcpgo.NewTool("search_memory",
-		mcpgo.WithDescription("Search memory traces by semantic similarity. Returns traces most relevant to the query."),
+		mcpgo.WithDescription("Search memory engrams by semantic similarity. Returns engrams most relevant to the query."),
 		mcpgo.WithString("query", mcpgo.Required(), mcpgo.Description("The search query")),
 		mcpgo.WithNumber("limit", mcpgo.Description("Maximum results to return (default 10)")),
 	)
@@ -79,96 +79,104 @@ func searchMemoryHandler(svc *Services) server.ToolHandlerFunc {
 	}
 }
 
-// --- Tool: list_traces ---
+// --- Tool: list_engrams ---
 
-func listTracesTool() mcpgo.Tool {
-	return mcpgo.NewTool("list_traces",
-		mcpgo.WithDescription("List all memory traces with their IDs and content preview."),
+func listEngramsTool() mcpgo.Tool {
+	return mcpgo.NewTool("list_engrams",
+		mcpgo.WithDescription("List all memory engrams with their IDs and content preview."),
 	)
 }
 
-func listTracesHandler(svc *Services) server.ToolHandlerFunc {
+func listEngramsHandler(svc *Services) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		traces, err := svc.Graph.GetAllTraces()
+		engrams, err := svc.Graph.GetAllEngrams()
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
 		}
-		data, _ := json.MarshalIndent(traces, "", "  ")
+		data, _ := json.MarshalIndent(engrams, "", "  ")
 		return mcpgo.NewToolResultText(string(data)), nil
 	}
 }
 
-// --- Tool: get_trace ---
+// --- Tool: get_engram ---
 
-func getTraceTool() mcpgo.Tool {
-	return mcpgo.NewTool("get_trace",
-		mcpgo.WithDescription("Get a specific memory trace by ID. Uses L1 compressed summaries by default."),
-		mcpgo.WithString("trace_id", mcpgo.Required(), mcpgo.Description("The trace ID to retrieve (short 5-char ID or full ID)")),
+func getEngramTool() mcpgo.Tool {
+	return mcpgo.NewTool("get_engram",
+		mcpgo.WithDescription("Get a specific memory engram by ID. Uses L1 compressed summaries by default."),
+		mcpgo.WithString("engram_id", mcpgo.Required(), mcpgo.Description("The engram ID to retrieve (prefix or full 32-char ID)")),
 		mcpgo.WithNumber("level", mcpgo.Description("Compression level: 0=raw, 1=L1 summary (default), 2=L2 summary")),
 	)
 }
 
-func getTraceHandler(svc *Services) server.ToolHandlerFunc {
+func getEngramHandler(svc *Services) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := req.GetString("trace_id", "")
+		id := req.GetString("engram_id", "")
 		if id == "" {
-			return mcpgo.NewToolResultError("trace_id is required"), nil
+			return mcpgo.NewToolResultError("engram_id is required"), nil
 		}
 
 		level := req.GetInt("level", 1)
 
-		trace, err := svc.Graph.GetTrace(id)
-		if err != nil {
-			trace, err = svc.Graph.GetTraceByShortID(id)
-			if err != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("trace not found: %v", err)), nil
+		engram, err := svc.Graph.GetEngram(id)
+		if err != nil || engram == nil {
+			fullID, resolveErr := svc.Graph.ResolveEngramID(id)
+			if resolveErr != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("engram not found: %v", resolveErr)), nil
+			}
+			engram, err = svc.Graph.GetEngram(fullID)
+			if err != nil || engram == nil {
+				return mcpgo.NewToolResultError("engram not found"), nil
 			}
 		}
 
 		// Apply compression level if requested
 		if level > 0 {
-			if summary, err2 := svc.Graph.GetTraceSummary(trace.ID, level); err2 == nil && summary != nil {
-				trace.Summary = summary.Summary
+			if summary, err2 := svc.Graph.GetEngramSummary(engram.ID, level); err2 == nil && summary != nil {
+				engram.Summary = summary.Summary
 			}
 		}
 
-		data, _ := json.MarshalIndent(trace, "", "  ")
+		data, _ := json.MarshalIndent(engram, "", "  ")
 		return mcpgo.NewToolResultText(string(data)), nil
 	}
 }
 
-// --- Tool: get_trace_context ---
+// --- Tool: get_engram_context ---
 
-func getTraceContextTool() mcpgo.Tool {
-	return mcpgo.NewTool("get_trace_context",
-		mcpgo.WithDescription("Get detailed context for a trace, including source episodes and linked entities."),
-		mcpgo.WithString("trace_id", mcpgo.Required(), mcpgo.Description("The trace ID to get context for")),
+func getEngramContextTool() mcpgo.Tool {
+	return mcpgo.NewTool("get_engram_context",
+		mcpgo.WithDescription("Get detailed context for an engram, including source episodes and linked entities."),
+		mcpgo.WithString("engram_id", mcpgo.Required(), mcpgo.Description("The engram ID to get context for")),
 	)
 }
 
-type traceContextResult struct {
-	Trace    *graph.Trace    `json:"trace"`
+type engramContextResult struct {
+	Engram   *graph.Engram   `json:"engram"`
 	Sources  []graph.Episode `json:"source_episodes"`
 	Entities []*graph.Entity `json:"linked_entities"`
 }
 
-func getTraceContextHandler(svc *Services) server.ToolHandlerFunc {
+func getEngramContextHandler(svc *Services) server.ToolHandlerFunc {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		id := req.GetString("trace_id", "")
+		id := req.GetString("engram_id", "")
 		if id == "" {
-			return mcpgo.NewToolResultError("trace_id is required"), nil
+			return mcpgo.NewToolResultError("engram_id is required"), nil
 		}
 
-		trace, err := svc.Graph.GetTrace(id)
-		if err != nil {
-			trace, err = svc.Graph.GetTraceByShortID(id)
-			if err != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("trace not found: %v", err)), nil
+		engram, err := svc.Graph.GetEngram(id)
+		if err != nil || engram == nil {
+			fullID, resolveErr := svc.Graph.ResolveEngramID(id)
+			if resolveErr != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("engram not found: %v", resolveErr)), nil
+			}
+			engram, err = svc.Graph.GetEngram(fullID)
+			if err != nil || engram == nil {
+				return mcpgo.NewToolResultError("engram not found"), nil
 			}
 		}
 
-		sources, _ := svc.Graph.GetTraceSourceEpisodes(trace.ID)
-		entityIDs, _ := svc.Graph.GetTraceEntities(trace.ID)
+		sources, _ := svc.Graph.GetEngramSourceEpisodes(engram.ID)
+		entityIDs, _ := svc.Graph.GetEngramEntities(engram.ID)
 		var entities []*graph.Entity
 		for _, eid := range entityIDs {
 			if e, err2 := svc.Graph.GetEntity(eid); err2 == nil {
@@ -176,8 +184,8 @@ func getTraceContextHandler(svc *Services) server.ToolHandlerFunc {
 			}
 		}
 
-		result := traceContextResult{
-			Trace:    trace,
+		result := engramContextResult{
+			Engram:   engram,
 			Sources:  sources,
 			Entities: entities,
 		}
@@ -190,7 +198,7 @@ func getTraceContextHandler(svc *Services) server.ToolHandlerFunc {
 
 func queryEpisodeTool() mcpgo.Tool {
 	return mcpgo.NewTool("query_episode",
-		mcpgo.WithDescription("Get a specific episode by its ID (short 5-char ID or full ID)."),
+		mcpgo.WithDescription("Get a specific episode by its ID (prefix or full 32-char ID)."),
 		mcpgo.WithString("id", mcpgo.Required(), mcpgo.Description("Episode ID")),
 	)
 }
@@ -203,10 +211,14 @@ func queryEpisodeHandler(svc *Services) server.ToolHandlerFunc {
 		}
 
 		ep, err := svc.Graph.GetEpisode(id)
-		if err != nil {
-			ep, err = svc.Graph.GetEpisodeByShortID(id)
-			if err != nil {
-				return mcpgo.NewToolResultError(fmt.Sprintf("episode not found: %v", err)), nil
+		if err != nil || ep == nil {
+			fullID, resolveErr := svc.Graph.ResolveEpisodeID(id)
+			if resolveErr != nil {
+				return mcpgo.NewToolResultError(fmt.Sprintf("episode not found: %v", resolveErr)), nil
+			}
+			ep, err = svc.Graph.GetEpisode(fullID)
+			if err != nil || ep == nil {
+				return mcpgo.NewToolResultError("episode not found"), nil
 			}
 		}
 

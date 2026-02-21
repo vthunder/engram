@@ -132,7 +132,6 @@ func NewClaudeInferenceFromGenerator(gen Generator, verbose bool) *ClaudeInferen
 // EpisodeForInference provides episode data for Claude inference.
 type EpisodeForInference interface {
 	GetID() string
-	GetShortID() string
 	GetAuthor() string
 	GetTimestamp() time.Time
 	GetSummaryC16() string
@@ -197,9 +196,9 @@ func (c *ClaudeInference) InferEpisodeEdges(ctx context.Context, episodes []Epis
 	return edges, nil
 }
 
-// InferTraceRelationship analyzes an episode and a trace to determine their relationship.
-func (c *ClaudeInference) InferTraceRelationship(ctx context.Context, ep *graph.Episode, trace *graph.Trace) (string, float64, error) {
-	prompt := c.buildTraceRelationshipPrompt(ep, trace)
+// InferEngramRelationship analyzes an episode and an engram to determine their relationship.
+func (c *ClaudeInference) InferEngramRelationship(ctx context.Context, ep *graph.Episode, engram *graph.Engram) (string, float64, error) {
+	prompt := c.buildEngramRelationshipPrompt(ep, engram)
 
 	output, err := c.client.Generate(ctx, prompt)
 	if err != nil {
@@ -270,10 +269,10 @@ Use medium confidence (0.6-0.7) for cross-author semantic relationships.
 	return sb.String()
 }
 
-func (c *ClaudeInference) buildTraceRelationshipPrompt(ep *graph.Episode, trace *graph.Trace) string {
+func (c *ClaudeInference) buildEngramRelationshipPrompt(ep *graph.Episode, engram *graph.Engram) string {
 	var sb strings.Builder
 
-	sb.WriteString(`You are analyzing the relationship between a new conversation episode and an existing memory trace.
+	sb.WriteString(`You are analyzing the relationship between a new conversation episode and an existing memory engram.
 
 Determine:
 1. The semantic relationship (e.g., "provides example of", "updates", "contradicts", "reinforces", "relates to")
@@ -290,7 +289,7 @@ Episode:
 	sb.WriteString(fmt.Sprintf("Timestamp: %s\n", ep.TimestampEvent.Format("2006-01-02 15:04:05")))
 	sb.WriteString(fmt.Sprintf("Content: %s\n\n", ep.Content))
 
-	sb.WriteString(fmt.Sprintf(`Memory Trace:
+	sb.WriteString(fmt.Sprintf(`Memory Engram:
 Summary: %s
 
 Return your analysis as JSON:
@@ -301,7 +300,7 @@ Return your analysis as JSON:
 }
 
 If there's no meaningful relationship, set confidence to 0.0.
-`, trace.Summary))
+`, engram.Summary))
 
 	return sb.String()
 }

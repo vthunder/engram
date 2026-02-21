@@ -43,7 +43,7 @@ const (
 	EdgeAllergicTo  EdgeType = "ALLERGIC_TO"
 	EdgeHasPet      EdgeType = "HAS_PET"
 
-	// Trace edges
+	// Engram edges
 	EdgeSourcedFrom   EdgeType = "SOURCED_FROM"
 	EdgeInvolves      EdgeType = "INVOLVES"
 	EdgeInvalidatedBy EdgeType = "INVALIDATED_BY"
@@ -56,17 +56,17 @@ type EntityType string
 
 const (
 	// Core entity types (OntoNotes)
-	EntityPerson    EntityType = "PERSON"     // People, including fictional
-	EntityOrg       EntityType = "ORG"        // Organizations
-	EntityGPE       EntityType = "GPE"        // Geopolitical entities (countries, cities, states)
-	EntityLoc       EntityType = "LOC"        // Non-GPE locations (mountains, bodies of water)
-	EntityFac       EntityType = "FAC"        // Facilities (buildings, airports, highways)
-	EntityProduct   EntityType = "PRODUCT"    // Products (vehicles, weapons, foods)
-	EntityEvent     EntityType = "EVENT"      // Named events (hurricanes, battles, wars)
+	EntityPerson    EntityType = "PERSON"      // People, including fictional
+	EntityOrg       EntityType = "ORG"         // Organizations
+	EntityGPE       EntityType = "GPE"         // Geopolitical entities (countries, cities, states)
+	EntityLoc       EntityType = "LOC"         // Non-GPE locations (mountains, bodies of water)
+	EntityFac       EntityType = "FAC"         // Facilities (buildings, airports, highways)
+	EntityProduct   EntityType = "PRODUCT"     // Products (vehicles, weapons, foods)
+	EntityEvent     EntityType = "EVENT"       // Named events (hurricanes, battles, wars)
 	EntityWorkOfArt EntityType = "WORK_OF_ART" // Titles of books, songs, etc.
-	EntityLaw       EntityType = "LAW"        // Named documents made into laws
-	EntityLanguage  EntityType = "LANGUAGE"   // Named languages
-	EntityNorp      EntityType = "NORP"       // Nationalities, religious or political groups
+	EntityLaw       EntityType = "LAW"         // Named documents made into laws
+	EntityLanguage  EntityType = "LANGUAGE"    // Named languages
+	EntityNorp      EntityType = "NORP"        // Nationalities, religious or political groups
 
 	// Numeric/temporal types (OntoNotes)
 	EntityDate     EntityType = "DATE"     // Absolute or relative dates
@@ -89,15 +89,14 @@ const (
 // Episode represents a raw message in the memory graph (Tier 1)
 type Episode struct {
 	ID                   string    `json:"id"`
-	ShortID              string    `json:"short_id"`              // First 5 chars of BLAKE3 hash for display
 	Content              string    `json:"content"`
-	TokenCount           int       `json:"token_count"`           // Pre-computed token count
-	Source               string    `json:"source"`                // discord, calendar, etc.
+	TokenCount           int       `json:"token_count"`        // Pre-computed token count
+	Source               string    `json:"source"`             // discord, calendar, etc.
 	Author               string    `json:"author,omitempty"`
 	AuthorID             string    `json:"author_id,omitempty"`
 	Channel              string    `json:"channel,omitempty"`
-	TimestampEvent       time.Time `json:"timestamp_event"`       // T: when it happened
-	TimestampIngested    time.Time `json:"timestamp_ingested"`    // T': when we learned it
+	TimestampEvent       time.Time `json:"timestamp_event"`    // T: when it happened
+	TimestampIngested    time.Time `json:"timestamp_ingested"` // T': when we learned it
 	DialogueAct          string    `json:"dialogue_act,omitempty"`
 	EntropyScore         float64   `json:"entropy_score,omitempty"`
 	Embedding            []float64 `json:"embedding,omitempty"`
@@ -119,25 +118,24 @@ type Entity struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 }
 
-// TraceType classifies traces for differentiated decay and retrieval behavior.
-type TraceType string
+// EngramType classifies engrams for differentiated decay and retrieval behavior.
+type EngramType string
 
 const (
-	TraceTypeKnowledge   TraceType = "knowledge"   // Default: facts, decisions, preferences
-	TraceTypeOperational TraceType = "operational"  // Meeting reminders, state syncs, deploys, restarts
+	EngramTypeKnowledge  EngramType = "knowledge"  // Default: facts, decisions, preferences
+	EngramTypeOperational EngramType = "operational" // Meeting reminders, state syncs, deploys, restarts
 )
 
-// Trace represents a consolidated memory (Tier 3)
-type Trace struct {
-	ID           string    `json:"id"`
-	ShortID      string    `json:"short_id"`
-	Summary      string    `json:"summary"`
-	Topic        string    `json:"topic,omitempty"`
-	TraceType    TraceType `json:"trace_type,omitempty"`
-	Activation   float64   `json:"activation"`
-	Strength     int       `json:"strength"`
-	Embedding    []float64 `json:"embedding,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+// Engram represents a consolidated memory (Tier 3)
+type Engram struct {
+	ID         string     `json:"id"`
+	Summary    string     `json:"summary"`
+	Topic      string     `json:"topic,omitempty"`
+	EngramType EngramType `json:"engram_type,omitempty"`
+	Activation float64    `json:"activation"`
+	Strength   int        `json:"strength"`
+	Embedding  []float64  `json:"embedding,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 	LastAccessed time.Time `json:"last_accessed"`
 	LabileUntil  time.Time `json:"labile_until,omitempty"`
 
@@ -148,11 +146,11 @@ type Trace struct {
 
 // Edge represents a relationship between nodes
 type Edge struct {
-	ID        int64    `json:"id,omitempty"`
-	FromID    string   `json:"from_id"`
-	ToID      string   `json:"to_id"`
-	Type      EdgeType `json:"type"`
-	Weight    float64  `json:"weight"`
+	ID        int64     `json:"id,omitempty"`
+	FromID    string    `json:"from_id"`
+	ToID      string    `json:"to_id"`
+	Type      EdgeType  `json:"type"`
+	Weight    float64   `json:"weight"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
@@ -166,31 +164,31 @@ type Neighbor struct {
 // ActivationResult holds spreading activation results
 type ActivationResult struct {
 	NodeID     string
-	NodeType   string // "episode", "entity", "trace"
+	NodeType   string // "episode", "entity", "engram"
 	Activation float64
 }
 
 // RetrievalResult holds memory retrieval results
 type RetrievalResult struct {
-	Traces   []*Trace
+	Engrams  []*Engram
 	Episodes []*Episode
 	Entities []*Entity
 }
 
-// IsLabile returns true if the trace is in its reconsolidation window
-func (t *Trace) IsLabile() bool {
-	if t.LabileUntil.IsZero() {
+// IsLabile returns true if the engram is in its reconsolidation window
+func (e *Engram) IsLabile() bool {
+	if e.LabileUntil.IsZero() {
 		return false
 	}
-	return time.Now().Before(t.LabileUntil)
+	return time.Now().Before(e.LabileUntil)
 }
 
-// MakeLabile sets the trace as labile for the given duration
-func (t *Trace) MakeLabile(duration time.Duration) {
-	t.LabileUntil = time.Now().Add(duration)
+// MakeLabile sets the engram as labile for the given duration
+func (e *Engram) MakeLabile(duration time.Duration) {
+	e.LabileUntil = time.Now().Add(duration)
 }
 
-// Recency returns seconds since the trace was last accessed
-func (t *Trace) Recency() float64 {
-	return time.Since(t.LastAccessed).Seconds()
+// Recency returns seconds since the engram was last accessed
+func (e *Engram) Recency() float64 {
+	return time.Since(e.LastAccessed).Seconds()
 }

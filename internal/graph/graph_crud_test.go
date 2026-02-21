@@ -41,7 +41,7 @@ func TestAddAndGetEpisode(t *testing.T) {
 		t.Errorf("Channel mismatch: want general, got %s", got.Channel)
 	}
 	// ShortID should have been auto-generated
-	if got.ShortID == "" {
+	if got.ID[:5] == "" {
 		t.Error("Expected short_id to be generated")
 	}
 }
@@ -59,7 +59,7 @@ func TestGetEpisodeNotFound(t *testing.T) {
 	}
 }
 
-func TestGetEpisodeByShortID(t *testing.T) {
+func TestResolveEpisodeID(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -74,15 +74,12 @@ func TestGetEpisodeByShortID(t *testing.T) {
 	}
 
 	// Retrieve by short ID
-	got, err := db.GetEpisodeByShortID(ep.ShortID)
+	fullID, err := db.ResolveEpisodeID(ep.ID[:5])
 	if err != nil {
-		t.Fatalf("GetEpisodeByShortID failed: %v", err)
+		t.Fatalf("ResolveEpisodeID failed: %v", err)
 	}
-	if got == nil {
-		t.Fatal("Expected episode, got nil")
-	}
-	if got.ID != ep.ID {
-		t.Errorf("ID mismatch: want %s, got %s", ep.ID, got.ID)
+	if fullID != ep.ID {
+		t.Errorf("ID mismatch: want %s, got %s", ep.ID, fullID)
 	}
 }
 
@@ -278,8 +275,8 @@ func TestGetUnconsolidatedEpisodes(t *testing.T) {
 	db.AddEpisode(&Episode{ID: "ep-c1", Content: "Consolidated", Source: "test", TimestampEvent: time.Now()})
 
 	// Add a trace and link ep-c1 to it
-	db.AddTrace(&Trace{ID: "tr-for-ep", Summary: "Test"})
-	db.LinkTraceToSource("tr-for-ep", "ep-c1")
+	db.AddEngram(&Engram{ID: "tr-for-ep", Summary: "Test"})
+	db.LinkEngramToSource("tr-for-ep", "ep-c1")
 
 	count, err := db.GetUnconsolidatedEpisodeCount()
 	if err != nil {
@@ -312,8 +309,8 @@ func TestGetUnconsolidatedEpisodeIDsForChannel(t *testing.T) {
 	db.AddEpisode(&Episode{ID: "ep-ch3", Content: "Chan A consolidated", Source: "test", Channel: "chan-a", TimestampEvent: time.Now()})
 
 	// Consolidate ep-ch3
-	db.AddTrace(&Trace{ID: "tr-ch", Summary: "Test"})
-	db.LinkTraceToSource("tr-ch", "ep-ch3")
+	db.AddEngram(&Engram{ID: "tr-ch", Summary: "Test"})
+	db.LinkEngramToSource("tr-ch", "ep-ch3")
 
 	ids, err := db.GetUnconsolidatedEpisodeIDsForChannel("chan-a")
 	if err != nil {
@@ -381,83 +378,83 @@ func TestGetEpisodeEntities(t *testing.T) {
 
 // ---- Trace CRUD ----
 
-func TestGetTraceByShortID(t *testing.T) {
+func TestResolveEngramID(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	tr := &Trace{ID: "trace-shortid-1", Summary: "Short ID test trace"}
-	if err := addTestTrace(t, db, tr); err != nil {
-		t.Fatalf("AddTrace failed: %v", err)
+	tr := &Engram{ID: "engram-shortid-1", Summary: "Short ID test trace"}
+	if err := addTestEngram(t, db, tr); err != nil {
+		t.Fatalf("AddEngram failed: %v", err)
 	}
 
-	got, err := db.GetTraceByShortID(tr.ShortID)
+	got, err := db.ResolveEngramID(tr.ID[:5])
 	if err != nil {
-		t.Fatalf("GetTraceByShortID failed: %v", err)
+		t.Fatalf("ResolveEngramID failed: %v", err)
 	}
-	if got == nil {
-		t.Fatal("Expected trace, got nil")
+	if got == "" {
+		t.Fatal("Expected engram ID, got empty string")
 	}
-	if got.ID != tr.ID {
-		t.Errorf("ID mismatch: want %s, got %s", tr.ID, got.ID)
+	if got != tr.ID {
+		t.Errorf("ID mismatch: want %s, got %s", tr.ID, got)
 	}
 }
 
-func TestCountTraces(t *testing.T) {
+func TestCountEngrams(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	count, err := db.CountTraces()
+	count, err := db.CountEngrams()
 	if err != nil {
-		t.Fatalf("CountTraces failed: %v", err)
+		t.Fatalf("CountEngrams failed: %v", err)
 	}
 	if count != 0 {
 		t.Errorf("Expected 0 traces, got %d", count)
 	}
 
-	db.AddTrace(&Trace{ID: "tr-cnt-1", Summary: "One"})
-	db.AddTrace(&Trace{ID: "tr-cnt-2", Summary: "Two"})
+	db.AddEngram(&Engram{ID: "tr-cnt-1", Summary: "One"})
+	db.AddEngram(&Engram{ID: "tr-cnt-2", Summary: "Two"})
 
-	count, err = db.CountTraces()
+	count, err = db.CountEngrams()
 	if err != nil {
-		t.Fatalf("CountTraces failed: %v", err)
+		t.Fatalf("CountEngrams failed: %v", err)
 	}
 	if count != 2 {
 		t.Errorf("Expected 2 traces, got %d", count)
 	}
 }
 
-func TestDeleteTrace(t *testing.T) {
+func TestDeleteEngram(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	if err := addTestTrace(t, db, &Trace{ID: "tr-del-1", Summary: "To be deleted"}); err != nil {
-		t.Fatalf("AddTrace failed: %v", err)
+	if err := addTestEngram(t, db, &Engram{ID: "tr-del-1", Summary: "To be deleted"}); err != nil {
+		t.Fatalf("AddEngram failed: %v", err)
 	}
 
 	// Verify it exists
-	got, _ := db.GetTrace("tr-del-1")
+	got, _ := db.GetEngram("tr-del-1")
 	if got == nil {
 		t.Fatal("Expected trace before delete")
 	}
 
 	// Delete it
-	if err := db.DeleteTrace("tr-del-1"); err != nil {
-		t.Fatalf("DeleteTrace failed: %v", err)
+	if err := db.DeleteEngram("tr-del-1"); err != nil {
+		t.Fatalf("DeleteEngram failed: %v", err)
 	}
 
 	// Should be gone
-	got, _ = db.GetTrace("tr-del-1")
+	got, _ = db.GetEngram("tr-del-1")
 	if got != nil {
 		t.Error("Expected nil after delete")
 	}
 
 	// Deleting non-existent should error
-	if err := db.DeleteTrace("nonexistent"); err == nil {
+	if err := db.DeleteEngram("nonexistent"); err == nil {
 		t.Error("Expected error deleting nonexistent trace")
 	}
 }
 
-func TestDeleteTraceCascades(t *testing.T) {
+func TestDeleteEngramCascades(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -465,53 +462,53 @@ func TestDeleteTraceCascades(t *testing.T) {
 	ep := &Episode{ID: "ep-cascade", Content: "Source", Source: "test", TimestampEvent: time.Now()}
 	db.AddEpisode(ep)
 	db.AddEntity(&Entity{ID: "entity-cascade", Name: "Cascade", Type: EntityPerson, Salience: 0.5})
-	addTestTrace(t, db, &Trace{ID: "tr-cascade", Summary: "Will cascade"})
-	db.LinkTraceToSource("tr-cascade", "ep-cascade")
-	db.LinkTraceToEntity("tr-cascade", "entity-cascade")
+	addTestEngram(t, db, &Engram{ID: "tr-cascade", Summary: "Will cascade"})
+	db.LinkEngramToSource("tr-cascade", "ep-cascade")
+	db.LinkEngramToEntity("tr-cascade", "entity-cascade")
 
 	// Delete the trace
-	db.DeleteTrace("tr-cascade")
+	db.DeleteEngram("tr-cascade")
 
 	// Source and entity links should be gone (cascade)
-	sources, _ := db.GetTraceSources("tr-cascade")
+	sources, _ := db.GetEngramSources("tr-cascade")
 	if len(sources) != 0 {
-		t.Errorf("Expected trace_sources to cascade delete, got %d sources", len(sources))
+		t.Errorf("Expected engram_episodes to cascade delete, got %d sources", len(sources))
 	}
-	entities, _ := db.GetTraceEntities("tr-cascade")
+	entities, _ := db.GetEngramEntities("tr-cascade")
 	if len(entities) != 0 {
-		t.Errorf("Expected trace_entities to cascade delete, got %d entities", len(entities))
+		t.Errorf("Expected engram_entities to cascade delete, got %d entities", len(entities))
 	}
 }
 
-func TestGetAllTraces(t *testing.T) {
+func TestGetAllEngrams(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	addTestTrace(t, db, &Trace{ID: "tr-all-1", Summary: "First"})
-	addTestTrace(t, db, &Trace{ID: "tr-all-2", Summary: "Second"})
-	addTestTrace(t, db, &Trace{ID: "tr-all-3", Summary: "Third"})
+	addTestEngram(t, db, &Engram{ID: "tr-all-1", Summary: "First"})
+	addTestEngram(t, db, &Engram{ID: "tr-all-2", Summary: "Second"})
+	addTestEngram(t, db, &Engram{ID: "tr-all-3", Summary: "Third"})
 
-	traces, err := db.GetAllTraces()
+	traces, err := db.GetAllEngrams()
 	if err != nil {
-		t.Fatalf("GetAllTraces failed: %v", err)
+		t.Fatalf("GetAllEngrams failed: %v", err)
 	}
 	if len(traces) != 3 {
 		t.Errorf("Expected 3 traces, got %d", len(traces))
 	}
 }
 
-func TestGetActivatedTraces(t *testing.T) {
+func TestGetActivatedEngrams(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	addTestTrace(t, db, &Trace{ID: "tr-act-high", Summary: "High", Activation: 0.9})
-	addTestTrace(t, db, &Trace{ID: "tr-act-mid", Summary: "Mid", Activation: 0.6})
-	addTestTrace(t, db, &Trace{ID: "tr-act-low", Summary: "Low", Activation: 0.2})
+	addTestEngram(t, db, &Engram{ID: "tr-act-high", Summary: "High", Activation: 0.9})
+	addTestEngram(t, db, &Engram{ID: "tr-act-mid", Summary: "Mid", Activation: 0.6})
+	addTestEngram(t, db, &Engram{ID: "tr-act-low", Summary: "Low", Activation: 0.2})
 
 	// Threshold 0.5 should return 2 traces
-	traces, err := db.GetActivatedTraces(0.5, 10)
+	traces, err := db.GetActivatedEngrams(0.5, 10)
 	if err != nil {
-		t.Fatalf("GetActivatedTraces failed: %v", err)
+		t.Fatalf("GetActivatedEngrams failed: %v", err)
 	}
 	if len(traces) != 2 {
 		t.Fatalf("Expected 2 traces above 0.5, got %d", len(traces))
@@ -522,24 +519,24 @@ func TestGetActivatedTraces(t *testing.T) {
 	}
 
 	// Limit should be respected
-	limited, _ := db.GetActivatedTraces(0.0, 1)
+	limited, _ := db.GetActivatedEngrams(0.0, 1)
 	if len(limited) != 1 {
 		t.Errorf("Expected 1 trace with limit=1, got %d", len(limited))
 	}
 }
 
-func TestGetActivatedTracesWithLevel(t *testing.T) {
+func TestGetActivatedEngramsWithLevel(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	tr := &Trace{ID: "tr-lvl-1", Summary: "Test summary", Activation: 0.8}
-	addTestTrace(t, db, tr)
+	tr := &Engram{ID: "tr-lvl-1", Summary: "Test summary", Activation: 0.8}
+	addTestEngram(t, db, tr)
 	// Add a level-8 summary
-	db.AddTraceSummary("tr-lvl-1", 8, "Short summary", 2)
+	db.AddEngramSummary("tr-lvl-1", 8, "Short summary", 2)
 
-	traces, err := db.GetActivatedTracesWithLevel(0.5, 10, 8)
+	traces, err := db.GetActivatedEngramsWithLevel(0.5, 10, 8)
 	if err != nil {
-		t.Fatalf("GetActivatedTracesWithLevel failed: %v", err)
+		t.Fatalf("GetActivatedEngramsWithLevel failed: %v", err)
 	}
 	if len(traces) != 1 {
 		t.Fatalf("Expected 1 trace, got %d", len(traces))
@@ -549,17 +546,17 @@ func TestGetActivatedTracesWithLevel(t *testing.T) {
 	}
 }
 
-func TestGetTracesBatch(t *testing.T) {
+func TestGetEngramsBatch(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	addTestTrace(t, db, &Trace{ID: "tr-batch-1", Summary: "Batch One"})
-	addTestTrace(t, db, &Trace{ID: "tr-batch-2", Summary: "Batch Two"})
-	addTestTrace(t, db, &Trace{ID: "tr-batch-3", Summary: "Batch Three"})
+	addTestEngram(t, db, &Engram{ID: "tr-batch-1", Summary: "Batch One"})
+	addTestEngram(t, db, &Engram{ID: "tr-batch-2", Summary: "Batch Two"})
+	addTestEngram(t, db, &Engram{ID: "tr-batch-3", Summary: "Batch Three"})
 
-	result, err := db.GetTracesBatch([]string{"tr-batch-1", "tr-batch-3"})
+	result, err := db.GetEngramsBatch([]string{"tr-batch-1", "tr-batch-3"})
 	if err != nil {
-		t.Fatalf("GetTracesBatch failed: %v", err)
+		t.Fatalf("GetEngramsBatch failed: %v", err)
 	}
 	if len(result) != 2 {
 		t.Fatalf("Expected 2 traces in map, got %d", len(result))
@@ -575,25 +572,25 @@ func TestGetTracesBatch(t *testing.T) {
 	}
 
 	// Empty input
-	empty, err := db.GetTracesBatch(nil)
+	empty, err := db.GetEngramsBatch(nil)
 	if err != nil {
-		t.Fatalf("GetTracesBatch(nil) failed: %v", err)
+		t.Fatalf("GetEngramsBatch(nil) failed: %v", err)
 	}
 	if len(empty) != 0 {
 		t.Errorf("Expected empty map, got %d entries", len(empty))
 	}
 }
 
-func TestGetTracesBatchAtLevel(t *testing.T) {
+func TestGetEngramsBatchAtLevel(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	addTestTrace(t, db, &Trace{ID: "tr-blvl-1", Summary: "Full summary here"})
-	db.AddTraceSummary("tr-blvl-1", 4, "4-word summary", 4)
+	addTestEngram(t, db, &Engram{ID: "tr-blvl-1", Summary: "Full summary here"})
+	db.AddEngramSummary("tr-blvl-1", 4, "4-word summary", 4)
 
-	result, err := db.GetTracesBatchAtLevel([]string{"tr-blvl-1"}, 4)
+	result, err := db.GetEngramsBatchAtLevel([]string{"tr-blvl-1"}, 4)
 	if err != nil {
-		t.Fatalf("GetTracesBatchAtLevel failed: %v", err)
+		t.Fatalf("GetEngramsBatchAtLevel failed: %v", err)
 	}
 	if len(result) != 1 {
 		t.Fatalf("Expected 1 trace, got %d", len(result))
@@ -603,7 +600,7 @@ func TestGetTracesBatchAtLevel(t *testing.T) {
 	}
 }
 
-func TestGetTraceSources(t *testing.T) {
+func TestGetEngramSources(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -611,52 +608,52 @@ func TestGetTraceSources(t *testing.T) {
 	ep2 := &Episode{ID: "ep-src-2", Content: "Source 2", Source: "test", TimestampEvent: time.Now()}
 	db.AddEpisode(ep1)
 	db.AddEpisode(ep2)
-	addTestTrace(t, db, &Trace{ID: "tr-src-1", Summary: "From episodes"})
-	db.LinkTraceToSource("tr-src-1", "ep-src-1")
-	db.LinkTraceToSource("tr-src-1", "ep-src-2")
+	addTestEngram(t, db, &Engram{ID: "tr-src-1", Summary: "From episodes"})
+	db.LinkEngramToSource("tr-src-1", "ep-src-1")
+	db.LinkEngramToSource("tr-src-1", "ep-src-2")
 
-	sources, err := db.GetTraceSources("tr-src-1")
+	sources, err := db.GetEngramSources("tr-src-1")
 	if err != nil {
-		t.Fatalf("GetTraceSources failed: %v", err)
+		t.Fatalf("GetEngramSources failed: %v", err)
 	}
 	if len(sources) != 2 {
 		t.Fatalf("Expected 2 source episode IDs, got %d", len(sources))
 	}
 }
 
-func TestGetEpisodeTraces(t *testing.T) {
+func TestGetEpisodeEngrams(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
 	ep := &Episode{ID: "ep-et-1", Content: "Shared episode", Source: "test", TimestampEvent: time.Now()}
 	db.AddEpisode(ep)
-	addTestTrace(t, db, &Trace{ID: "tr-et-1", Summary: "Trace 1"})
-	addTestTrace(t, db, &Trace{ID: "tr-et-2", Summary: "Trace 2"})
-	db.LinkTraceToSource("tr-et-1", "ep-et-1")
-	db.LinkTraceToSource("tr-et-2", "ep-et-1")
+	addTestEngram(t, db, &Engram{ID: "tr-et-1", Summary: "Trace 1"})
+	addTestEngram(t, db, &Engram{ID: "tr-et-2", Summary: "Trace 2"})
+	db.LinkEngramToSource("tr-et-1", "ep-et-1")
+	db.LinkEngramToSource("tr-et-2", "ep-et-1")
 
-	traceIDs, err := db.GetEpisodeTraces("ep-et-1")
+	traceIDs, err := db.GetEpisodeEngrams("ep-et-1")
 	if err != nil {
-		t.Fatalf("GetEpisodeTraces failed: %v", err)
+		t.Fatalf("GetEpisodeEngrams failed: %v", err)
 	}
 	if len(traceIDs) != 2 {
 		t.Fatalf("Expected 2 trace IDs, got %d", len(traceIDs))
 	}
 }
 
-func TestGetTraceEntities(t *testing.T) {
+func TestGetEngramEntities(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	addTestTrace(t, db, &Trace{ID: "tr-te-1", Summary: "Test"})
+	addTestEngram(t, db, &Engram{ID: "tr-te-1", Summary: "Test"})
 	db.AddEntity(&Entity{ID: "entity-te-1", Name: "TestEntity1", Type: EntityProduct, Salience: 0.5})
 	db.AddEntity(&Entity{ID: "entity-te-2", Name: "TestEntity2", Type: EntityProduct, Salience: 0.5})
-	db.LinkTraceToEntity("tr-te-1", "entity-te-1")
-	db.LinkTraceToEntity("tr-te-1", "entity-te-2")
+	db.LinkEngramToEntity("tr-te-1", "entity-te-1")
+	db.LinkEngramToEntity("tr-te-1", "entity-te-2")
 
-	entities, err := db.GetTraceEntities("tr-te-1")
+	entities, err := db.GetEngramEntities("tr-te-1")
 	if err != nil {
-		t.Fatalf("GetTraceEntities failed: %v", err)
+		t.Fatalf("GetEngramEntities failed: %v", err)
 	}
 	if len(entities) != 2 {
 		t.Fatalf("Expected 2 entity IDs, got %d", len(entities))
@@ -665,32 +662,32 @@ func TestGetTraceEntities(t *testing.T) {
 
 // ---- Trace bulk operations ----
 
-func TestBoostTraceAccess(t *testing.T) {
+func TestBoostEngramAccess(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	addTestTrace(t, db, &Trace{ID: "tr-boost-1", Summary: "Test", Activation: 0.5})
-	addTestTrace(t, db, &Trace{ID: "tr-boost-2", Summary: "Test", Activation: 0.8})
+	addTestEngram(t, db, &Engram{ID: "tr-boost-1", Summary: "Test", Activation: 0.5})
+	addTestEngram(t, db, &Engram{ID: "tr-boost-2", Summary: "Test", Activation: 0.8})
 
-	if err := db.BoostTraceAccess([]string{"tr-boost-1"}, 0.2); err != nil {
-		t.Fatalf("BoostTraceAccess failed: %v", err)
+	if err := db.BoostEngramAccess([]string{"tr-boost-1"}, 0.2); err != nil {
+		t.Fatalf("BoostEngramAccess failed: %v", err)
 	}
 
-	got, _ := db.GetTrace("tr-boost-1")
+	got, _ := db.GetEngram("tr-boost-1")
 	if got.Activation < 0.69 || got.Activation > 0.71 {
 		t.Errorf("Expected activation ~0.7 after boost, got %f", got.Activation)
 	}
 
 	// Trace 2 should be unchanged
-	got2, _ := db.GetTrace("tr-boost-2")
+	got2, _ := db.GetEngram("tr-boost-2")
 	if got2.Activation != 0.8 {
 		t.Errorf("Expected tr-boost-2 activation 0.8 (unchanged), got %f", got2.Activation)
 	}
 
 	// Activation should not exceed 1.0
-	addTestTrace(t, db, &Trace{ID: "tr-boost-max", Summary: "Near max", Activation: 0.95})
-	db.BoostTraceAccess([]string{"tr-boost-max"}, 0.5)
-	got3, _ := db.GetTrace("tr-boost-max")
+	addTestEngram(t, db, &Engram{ID: "tr-boost-max", Summary: "Near max", Activation: 0.95})
+	db.BoostEngramAccess([]string{"tr-boost-max"}, 0.5)
+	got3, _ := db.GetEngram("tr-boost-max")
 	if got3.Activation > 1.0 {
 		t.Errorf("Activation should not exceed 1.0, got %f", got3.Activation)
 	}
@@ -701,13 +698,13 @@ func TestDecayActivationByAge(t *testing.T) {
 	defer cleanup()
 
 	// Add a knowledge trace with old last_accessed
-	addTestTrace(t, db, &Trace{ID: "tr-decay-old", Summary: "Old", Activation: 0.9})
+	addTestEngram(t, db, &Engram{ID: "tr-decay-old", Summary: "Old", Activation: 0.9})
 	// Set last_accessed to 100 hours ago
-	db.TestSetTraceTimestamp("tr-decay-old", time.Now().Add(-100*time.Hour))
+	db.TestSetEngramTimestamp("tr-decay-old", time.Now().Add(-100*time.Hour))
 
 	// Add a recently accessed trace
-	addTestTrace(t, db, &Trace{ID: "tr-decay-new", Summary: "New", Activation: 0.9})
-	// last_accessed is now (set by AddTrace)
+	addTestEngram(t, db, &Engram{ID: "tr-decay-new", Summary: "New", Activation: 0.9})
+	// last_accessed is now (set by AddEngram)
 
 	// Decay with lambda=0.005 (gentle)
 	count, err := db.DecayActivationByAge(0.005, 0.01)
@@ -719,21 +716,21 @@ func TestDecayActivationByAge(t *testing.T) {
 	}
 
 	// Old trace should have decayed significantly
-	old, _ := db.GetTrace("tr-decay-old")
+	old, _ := db.GetEngram("tr-decay-old")
 	if old.Activation >= 0.9 {
 		t.Errorf("Expected old trace to decay below 0.9, got %f", old.Activation)
 	}
 
 	// Operational traces decay 3x faster
-	addTestTrace(t, db, &Trace{ID: "tr-decay-op", Summary: "Operational", Activation: 0.9, TraceType: TraceTypeOperational})
-	db.TestSetTraceTimestamp("tr-decay-op", time.Now().Add(-24*time.Hour))
-	addTestTrace(t, db, &Trace{ID: "tr-decay-kn", Summary: "Knowledge", Activation: 0.9, TraceType: TraceTypeKnowledge})
-	db.TestSetTraceTimestamp("tr-decay-kn", time.Now().Add(-24*time.Hour))
+	addTestEngram(t, db, &Engram{ID: "tr-decay-op", Summary: "Operational", Activation: 0.9, EngramType: EngramTypeOperational})
+	db.TestSetEngramTimestamp("tr-decay-op", time.Now().Add(-24*time.Hour))
+	addTestEngram(t, db, &Engram{ID: "tr-decay-kn", Summary: "Knowledge", Activation: 0.9, EngramType: EngramTypeKnowledge})
+	db.TestSetEngramTimestamp("tr-decay-kn", time.Now().Add(-24*time.Hour))
 
 	db.DecayActivationByAge(0.005, 0.01)
 
-	op, _ := db.GetTrace("tr-decay-op")
-	kn, _ := db.GetTrace("tr-decay-kn")
+	op, _ := db.GetEngram("tr-decay-op")
+	kn, _ := db.GetEngram("tr-decay-kn")
 	if op.Activation >= kn.Activation {
 		t.Errorf("Operational trace (%.3f) should decay faster than knowledge trace (%.3f)", op.Activation, kn.Activation)
 	}
@@ -741,22 +738,22 @@ func TestDecayActivationByAge(t *testing.T) {
 
 // ---- Batch neighbor operations ----
 
-func TestGetTraceNeighborsBatch(t *testing.T) {
+func TestGetEngramNeighborsBatch(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
 	// Create a small network: A->B, B->C
-	db.AddTrace(&Trace{ID: "tr-nb-A", Summary: "A"})
-	db.AddTrace(&Trace{ID: "tr-nb-B", Summary: "B"})
-	db.AddTrace(&Trace{ID: "tr-nb-C", Summary: "C"})
-	db.AddTrace(&Trace{ID: "tr-nb-D", Summary: "D"}) // isolated
+	db.AddEngram(&Engram{ID: "tr-nb-A", Summary: "A"})
+	db.AddEngram(&Engram{ID: "tr-nb-B", Summary: "B"})
+	db.AddEngram(&Engram{ID: "tr-nb-C", Summary: "C"})
+	db.AddEngram(&Engram{ID: "tr-nb-D", Summary: "D"}) // isolated
 
-	db.AddTraceRelation("tr-nb-A", "tr-nb-B", EdgeRelatedTo, 0.8)
-	db.AddTraceRelation("tr-nb-B", "tr-nb-C", EdgeRelatedTo, 0.6)
+	db.AddEngramRelation("tr-nb-A", "tr-nb-B", EdgeRelatedTo, 0.8)
+	db.AddEngramRelation("tr-nb-B", "tr-nb-C", EdgeRelatedTo, 0.6)
 
-	result, err := db.GetTraceNeighborsBatch([]string{"tr-nb-A", "tr-nb-B", "tr-nb-D"})
+	result, err := db.GetEngramNeighborsBatch([]string{"tr-nb-A", "tr-nb-B", "tr-nb-D"})
 	if err != nil {
-		t.Fatalf("GetTraceNeighborsBatch failed: %v", err)
+		t.Fatalf("GetEngramNeighborsBatch failed: %v", err)
 	}
 
 	// All requested IDs should be present in the map
@@ -798,9 +795,9 @@ func TestGetTraceNeighborsBatch(t *testing.T) {
 	}
 
 	// Empty input returns empty map
-	empty, err := db.GetTraceNeighborsBatch(nil)
+	empty, err := db.GetEngramNeighborsBatch(nil)
 	if err != nil {
-		t.Fatalf("GetTraceNeighborsBatch(nil) failed: %v", err)
+		t.Fatalf("GetEngramNeighborsBatch(nil) failed: %v", err)
 	}
 	if len(empty) != 0 {
 		t.Errorf("Expected empty map for nil input, got %d entries", len(empty))
@@ -820,9 +817,9 @@ func TestGetConsolidatedEpisodesWithEmbeddings(t *testing.T) {
 	db.AddEpisode(ep3)
 
 	// Consolidate ep1 and ep2; ep3 stays unconsolidated
-	db.AddTrace(&Trace{ID: "tr-cemb", Summary: "Test"})
-	db.LinkTraceToSource("tr-cemb", "ep-cemb-1")
-	db.LinkTraceToSource("tr-cemb", "ep-cemb-2")
+	db.AddEngram(&Engram{ID: "tr-cemb", Summary: "Test"})
+	db.LinkEngramToSource("tr-cemb", "ep-cemb-1")
+	db.LinkEngramToSource("tr-cemb", "ep-cemb-2")
 
 	got, err := db.GetConsolidatedEpisodesWithEmbeddings(0, 100)
 	if err != nil {

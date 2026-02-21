@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -12,22 +13,22 @@ type RetrievalTestFixture struct {
 
 	// Topics and their traces
 	topics      []string           // e.g., ["work", "personal", "health"]
-	topicTraces map[string][]string // topicName -> []traceID
+	topicEngrams map[string][]string // topicName -> []engramID
 
 	// Entities per topic
 	topicEntities map[string][]string // topicName -> []entityID
 }
 
 // NewRetrievalTestFixture creates a fixture with the given topic structure.
-// tracesPerTopic: how many traces to create for each topic
+// engramsPerTopic: how many traces to create for each topic
 // entitiesPerTopic: how many entities to create per topic
-func NewRetrievalTestFixture(t *testing.T, db *DB, topics []string, tracesPerTopic, entitiesPerTopic int) *RetrievalTestFixture {
+func NewRetrievalTestFixture(t *testing.T, db *DB, topics []string, engramsPerTopic, entitiesPerTopic int) *RetrievalTestFixture {
 	t.Helper()
 
 	f := &RetrievalTestFixture{
 		db:            db,
 		topics:        topics,
-		topicTraces:   make(map[string][]string),
+		topicEngrams:   make(map[string][]string),
 		topicEntities: make(map[string][]string),
 	}
 
@@ -46,8 +47,8 @@ func NewRetrievalTestFixture(t *testing.T, db *DB, topics []string, tracesPerTop
 		}
 
 		// Create traces for each topic
-		for j := 0; j < tracesPerTopic; j++ {
-			traceID := fmt.Sprintf("trace-%s-%d", topic, j)
+		for j := 0; j < engramsPerTopic; j++ {
+			engramID := fmt.Sprintf("engram-%s-%d", topic, j)
 
 			// Generate a topic-specific embedding
 			// Each topic gets a different "direction" in embedding space
@@ -56,8 +57,8 @@ func NewRetrievalTestFixture(t *testing.T, db *DB, topics []string, tracesPerTop
 			// Add some variation within topic
 			embedding = addNoise(embedding, 0.1)
 
-			db.AddTrace(&Trace{
-				ID:         traceID,
+			db.AddEngram(&Engram{
+				ID:         engramID,
 				Summary:    fmt.Sprintf("Trace about %s topic, item %d", topic, j),
 				Activation: 0.5,
 				Embedding:  embedding,
@@ -65,10 +66,10 @@ func NewRetrievalTestFixture(t *testing.T, db *DB, topics []string, tracesPerTop
 
 			// Link trace to topic entities (each trace links to all topic entities)
 			for _, entityID := range f.topicEntities[topic] {
-				db.LinkTraceToEntity(traceID, entityID)
+				db.LinkEngramToEntity(engramID, entityID)
 			}
 
-			f.topicTraces[topic] = append(f.topicTraces[topic], traceID)
+			f.topicEngrams[topic] = append(f.topicEngrams[topic], engramID)
 		}
 	}
 
@@ -138,22 +139,22 @@ func (f *RetrievalTestFixture) QueryEmbedding(topicIndex int) []float64 {
 
 // GetGroundTruth returns the trace IDs that should be retrieved for a topic query
 func (f *RetrievalTestFixture) GetGroundTruth(topicIndex int) []string {
-	return f.topicTraces[f.topics[topicIndex]]
+	return f.topicEngrams[f.topics[topicIndex]]
 }
 
-// GetNoisyTraces returns traces that should NOT be retrieved for a topic query
-func (f *RetrievalTestFixture) GetNoisyTraces(topicIndex int) []string {
+// GetNoisyEngrams returns traces that should NOT be retrieved for a topic query
+func (f *RetrievalTestFixture) GetNoisyEngrams(topicIndex int) []string {
 	var noisy []string
 	for i, topic := range f.topics {
 		if i != topicIndex {
-			noisy = append(noisy, f.topicTraces[topic]...)
+			noisy = append(noisy, f.topicEngrams[topic]...)
 		}
 	}
 	return noisy
 }
 
 // measurePrecisionAtK calculates precision@k: (relevant in top k) / k
-func measurePrecisionAtK(retrieved []*Trace, groundTruth map[string]bool, k int) float64 {
+func measurePrecisionAtK(retrieved []*Engram, groundTruth map[string]bool, k int) float64 {
 	if k > len(retrieved) {
 		k = len(retrieved)
 	}
@@ -170,7 +171,7 @@ func measurePrecisionAtK(retrieved []*Trace, groundTruth map[string]bool, k int)
 }
 
 // measureRecallAtK calculates recall@k: (relevant in top k) / total_relevant
-func measureRecallAtK(retrieved []*Trace, groundTruth map[string]bool, k int) float64 {
+func measureRecallAtK(retrieved []*Engram, groundTruth map[string]bool, k int) float64 {
 	if len(groundTruth) == 0 {
 		return 0
 	}
@@ -208,24 +209,24 @@ func TestRetrievalQualitySmallGraph(t *testing.T) {
 
 			// Build ground truth set
 			groundTruth := make(map[string]bool)
-			for _, traceID := range fixture.GetGroundTruth(i) {
-				groundTruth[traceID] = true
+			for _, engramID := range fixture.GetGroundTruth(i) {
+				groundTruth[engramID] = true
 			}
 
 			// Calculate metrics
-			p5 := measurePrecisionAtK(result.Traces, groundTruth, 5)
-			r5 := measureRecallAtK(result.Traces, groundTruth, 5)
+			p5 := measurePrecisionAtK(result.Engrams, groundTruth, 5)
+			r5 := measureRecallAtK(result.Engrams, groundTruth, 5)
 
 			t.Logf("Topic %s: retrieved %d traces, precision@5=%.2f, recall@5=%.2f",
-				topic, len(result.Traces), p5, r5)
+				topic, len(result.Engrams), p5, r5)
 
 			// We expect good precision (most retrieved should be relevant)
-			if p5 < 0.6 && len(result.Traces) > 0 {
+			if p5 < 0.6 && len(result.Engrams) > 0 {
 				t.Errorf("Low precision@5: %.2f (expected >= 0.6)", p5)
 			}
 
 			// Log retrieved traces for debugging
-			for i, tr := range result.Traces {
+			for i, tr := range result.Engrams {
 				isRelevant := groundTruth[tr.ID]
 				t.Logf("  %d. %s (activation=%.3f, relevant=%v)", i+1, tr.ID, tr.Activation, isRelevant)
 			}
@@ -259,19 +260,19 @@ func TestRetrievalQualityMediumGraph(t *testing.T) {
 
 			// Build ground truth set
 			groundTruth := make(map[string]bool)
-			for _, traceID := range fixture.GetGroundTruth(topicIdx) {
-				groundTruth[traceID] = true
+			for _, engramID := range fixture.GetGroundTruth(topicIdx) {
+				groundTruth[engramID] = true
 			}
 
 			// Calculate metrics
-			p5 := measurePrecisionAtK(result.Traces, groundTruth, 5)
-			p10 := measurePrecisionAtK(result.Traces, groundTruth, 10)
+			p5 := measurePrecisionAtK(result.Engrams, groundTruth, 5)
+			p10 := measurePrecisionAtK(result.Engrams, groundTruth, 10)
 
 			t.Logf("Topic %s (200 total traces): retrieved %d, precision@5=%.2f, precision@10=%.2f",
-				topic, len(result.Traces), p5, p10)
+				topic, len(result.Engrams), p5, p10)
 
 			// With more noise, we expect slightly lower but still reasonable precision
-			if p5 < 0.4 && len(result.Traces) >= 5 {
+			if p5 < 0.4 && len(result.Engrams) >= 5 {
 				t.Errorf("Low precision@5: %.2f (expected >= 0.4)", p5)
 			}
 		})
@@ -305,15 +306,15 @@ func TestRetrievalQualityLargeGraph(t *testing.T) {
 
 		// Build ground truth set
 		groundTruth := make(map[string]bool)
-		for _, traceID := range fixture.GetGroundTruth(0) {
-			groundTruth[traceID] = true
+		for _, engramID := range fixture.GetGroundTruth(0) {
+			groundTruth[engramID] = true
 		}
 
-		p5 := measurePrecisionAtK(result.Traces, groundTruth, 5)
-		p10 := measurePrecisionAtK(result.Traces, groundTruth, 10)
+		p5 := measurePrecisionAtK(result.Engrams, groundTruth, 5)
+		p10 := measurePrecisionAtK(result.Engrams, groundTruth, 10)
 
 		t.Logf("Topic %s (500 total traces): retrieved %d, precision@5=%.2f, precision@10=%.2f",
-			topic, len(result.Traces), p5, p10)
+			topic, len(result.Engrams), p5, p10)
 
 		// At scale, precision may drop - document the actual behavior
 		t.Logf("Large graph retrieval behavior captured for analysis")
@@ -330,19 +331,19 @@ func TestEntityOnlyRetrieval(t *testing.T) {
 
 	// Create traces linked to Alice
 	for i := 0; i < 5; i++ {
-		db.AddTrace(&Trace{
-			ID:         fmt.Sprintf("trace-alice-%d", i),
+		db.AddEngram(&Engram{
+			ID:         fmt.Sprintf("engram-alice-%d", i),
 			Summary:    fmt.Sprintf("Meeting with Alice about topic %d", i),
 			Activation: 0.5,
 			Embedding:  []float64{0.1, 0.1, 0.1, 0.1}, // Low-magnitude embedding
 		})
-		db.LinkTraceToEntity(fmt.Sprintf("trace-alice-%d", i), "entity-alice")
+		db.LinkEngramToEntity(fmt.Sprintf("engram-alice-%d", i), "entity-alice")
 	}
 
 	// Create noise traces (not linked to Alice)
 	for i := 0; i < 10; i++ {
-		db.AddTrace(&Trace{
-			ID:         fmt.Sprintf("trace-noise-%d", i),
+		db.AddEngram(&Engram{
+			ID:         fmt.Sprintf("engram-noise-%d", i),
 			Summary:    fmt.Sprintf("Unrelated trace %d", i),
 			Activation: 0.5,
 			Embedding:  []float64{0.1, 0.1, 0.1, 0.1},
@@ -357,15 +358,15 @@ func TestEntityOnlyRetrieval(t *testing.T) {
 
 	// Check that Alice traces are retrieved
 	aliceCount := 0
-	for _, tr := range result.Traces {
-		if len(tr.ID) > 11 && tr.ID[:11] == "trace-alice" {
+	for _, tr := range result.Engrams {
+		if strings.HasPrefix(tr.ID, "engram-alice") {
 			aliceCount++
 		}
 	}
 
-	t.Logf("Retrieved %d traces, %d related to Alice", len(result.Traces), aliceCount)
+	t.Logf("Retrieved %d traces, %d related to Alice", len(result.Engrams), aliceCount)
 
-	if len(result.Traces) > 0 && aliceCount == 0 {
+	if len(result.Engrams) > 0 && aliceCount == 0 {
 		t.Error("Expected at least some Alice traces to be retrieved via entity seeding")
 	}
 }

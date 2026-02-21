@@ -42,9 +42,9 @@ const (
 	SeedBoost = 0.5 // additive boost for seed nodes
 )
 
-// GetAllTraceActivations returns current activation values for all traces
-func (g *DB) GetAllTraceActivations() (map[string]float64, error) {
-	rows, err := g.db.Query(`SELECT id, activation FROM traces WHERE activation > 0`)
+// GetAllEngramActivations returns current activation values for all traces
+func (g *DB) GetAllEngramActivations() (map[string]float64, error) {
+	rows, err := g.db.Query(`SELECT id, activation FROM engrams WHERE activation > 0`)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (g *DB) GetAllTraceActivations() (map[string]float64, error) {
 // PersistActivations saves activation values to the database
 func (g *DB) PersistActivations(activations map[string]float64) error {
 	for id, activation := range activations {
-		if err := g.UpdateTraceActivation(id, activation); err != nil {
+		if err := g.UpdateEngramActivation(id, activation); err != nil {
 			// Continue on error, best effort
 			continue
 		}
@@ -94,7 +94,7 @@ func (g *DB) SpreadActivation(seedIDs []string, iterations int) (map[string]floa
 	// Batch-load neighbors for all seeds in 2 SQL queries (vs 2*N queries previously)
 	neighborCache := make(map[string][]Neighbor)
 	fanOut := make(map[string]float64)
-	if batchResult, err := g.GetTraceNeighborsBatch(seedIDs); err == nil {
+	if batchResult, err := g.GetEngramNeighborsBatch(seedIDs); err == nil {
 		for id, neighbors := range batchResult {
 			neighborCache[id] = neighbors
 			fanOut[id] = math.Max(1.0, float64(len(neighbors)))
@@ -102,7 +102,7 @@ func (g *DB) SpreadActivation(seedIDs []string, iterations int) (map[string]floa
 	} else {
 		// Fallback: per-node loading if batch fails
 		for id := range activation {
-			if neighbors, err := g.GetTraceNeighbors(id); err == nil {
+			if neighbors, err := g.GetEngramNeighbors(id); err == nil {
 				neighborCache[id] = neighbors
 				fanOut[id] = math.Max(1.0, float64(len(neighbors)))
 			}
@@ -120,7 +120,7 @@ func (g *DB) SpreadActivation(seedIDs []string, iterations int) (map[string]floa
 			}
 		}
 		if len(uncached) > 0 {
-			if batchResult, err := g.GetTraceNeighborsBatch(uncached); err == nil {
+			if batchResult, err := g.GetEngramNeighborsBatch(uncached); err == nil {
 				for id, neighbors := range batchResult {
 					neighborCache[id] = neighbors
 					fanOut[id] = math.Max(1.0, float64(len(neighbors)))
@@ -128,7 +128,7 @@ func (g *DB) SpreadActivation(seedIDs []string, iterations int) (map[string]floa
 			} else {
 				// Fallback: per-node loading
 				for _, id := range uncached {
-					if neighbors, err := g.GetTraceNeighbors(id); err == nil {
+					if neighbors, err := g.GetEngramNeighbors(id); err == nil {
 						neighborCache[id] = neighbors
 						fanOut[id] = math.Max(1.0, float64(len(neighbors)))
 					}
@@ -188,7 +188,7 @@ func (g *DB) SpreadActivationFromEmbedding(queryEmb []float64, queryText string,
 	// Trigger 1: Semantic similarity (embedding-based, uses sqlite-vec KNN)
 	go func() {
 		t0 := time.Now()
-		ids, err := g.FindSimilarTraces(queryEmb, topK)
+		ids, err := g.FindSimilarEngrams(queryEmb, topK)
 		if err != nil {
 			ids = nil
 		}
@@ -202,7 +202,7 @@ func (g *DB) SpreadActivationFromEmbedding(queryEmb []float64, queryText string,
 			return
 		}
 		t0 := time.Now()
-		ids, err := g.FindTracesWithKeywords(queryText, topK)
+		ids, err := g.FindEngramsWithKeywords(queryText, topK)
 		if err != nil {
 			ids = nil
 		}
@@ -226,7 +226,7 @@ func (g *DB) SpreadActivationFromEmbedding(queryEmb []float64, queryText string,
 			entityIDs[i] = e.ID
 		}
 		// Batch-load traces for all entities in a single SQL query
-		ids, err := g.GetTracesForEntitiesBatch(entityIDs, 5)
+		ids, err := g.GetEngramsForEntitiesBatch(entityIDs, 5)
 		if err != nil {
 			ids = nil
 		}
@@ -266,20 +266,20 @@ func (g *DB) SpreadActivationFromEmbedding(queryEmb []float64, queryText string,
 	return spreadResult, spreadErr
 }
 
-// FindTracesWithKeywords performs lexical/keyword matching using FTS5 BM25 ranking.
+// FindEngramsWithKeywords performs lexical/keyword matching using FTS5 BM25 ranking.
 // Falls back to a Go-side full scan if the FTS5 index is unavailable.
 // Returns up to topK trace IDs ordered by relevance.
-func (g *DB) FindTracesWithKeywords(query string, topK int) ([]string, error) {
+func (g *DB) FindEngramsWithKeywords(query string, topK int) ([]string, error) {
 	keywords := extractKeywords(query)
 	if len(keywords) == 0 {
 		return nil, nil
 	}
 
-	// Try FTS5 path first: query trace_fts with OR-joined keywords, ranked by BM25.
+	// Try FTS5 path first: query engram_fts with OR-joined keywords, ranked by BM25.
 	ftsQuery := strings.Join(keywords, " OR ")
 	rows, err := g.db.Query(`
-		SELECT trace_id
-		FROM trace_fts
+		SELECT engram_id
+		FROM engram_fts
 		WHERE summary MATCH ?
 		ORDER BY rank
 		LIMIT ?
@@ -301,8 +301,8 @@ func (g *DB) FindTracesWithKeywords(query string, topK int) ([]string, error) {
 	// Fallback: full table scan with Go-side keyword counting (O(n) but always works).
 	scanRows, err := g.db.Query(`
 		SELECT t.id, COALESCE(ts.summary, '')
-		FROM traces t
-		LEFT JOIN trace_summaries ts ON t.id = ts.trace_id AND ts.compression_level = 32
+		FROM engrams t
+		LEFT JOIN engram_summaries ts ON t.id = ts.engram_id AND ts.compression_level = 32
 	`)
 	if err != nil {
 		return nil, err
@@ -388,38 +388,38 @@ func extractKeywords(query string) []string {
 // Minimum similarity threshold for seeding
 const MinSimilarityThreshold = 0.3
 
-// FindSimilarTraces finds traces similar to the query embedding.
+// FindSimilarEngrams finds traces similar to the query embedding.
 // Uses sqlite-vec KNN when available and dimension matches; falls back to O(n) Go scan.
 // Only returns traces with similarity above MinSimilarityThreshold.
-func (g *DB) FindSimilarTraces(queryEmb []float64, topK int) ([]string, error) {
+func (g *DB) FindSimilarEngrams(queryEmb []float64, topK int) ([]string, error) {
 	if g.vecAvailable && g.vecDim > 0 && len(queryEmb) == g.vecDim {
-		return g.findSimilarTracesVec(queryEmb, topK)
+		return g.findSimilarEngramsVec(queryEmb, topK)
 	}
-	return g.findSimilarTracesScan(queryEmb, topK)
+	return g.findSimilarEngramsScan(queryEmb, topK)
 }
 
-// findSimilarTracesVec uses the vec0 virtual table for fast cosine-equivalent KNN.
+// findSimilarEngramsVec uses the vec0 virtual table for fast cosine-equivalent KNN.
 // vec0 uses L2 distance; vectors are stored normalized so L2 relates to cosine:
 //   cosine_dist = L2_dist² / 2  →  L2_threshold = sqrt(2 * cosine_dist_threshold)
-func (g *DB) findSimilarTracesVec(queryEmb []float64, topK int) ([]string, error) {
+func (g *DB) findSimilarEngramsVec(queryEmb []float64, topK int) ([]string, error) {
 	emb32 := normalizeFloat32(float64ToFloat32(queryEmb)) // normalize to match stored vectors
 	serialized, err := sqlite_vec.SerializeFloat32(emb32)
 	if err != nil {
-		return g.findSimilarTracesScan(queryEmb, topK)
+		return g.findSimilarEngramsScan(queryEmb, topK)
 	}
 	// Convert cosine similarity threshold to L2 distance threshold for normalized vectors
 	maxL2Distance := cosineDistToL2(1.0 - MinSimilarityThreshold)
 
 	// Fetch topK*3 candidates then apply threshold filter.
 	rows, err := g.db.Query(`
-		SELECT trace_id, distance
-		FROM trace_vec
+		SELECT engram_id, distance
+		FROM engram_vec
 		WHERE embedding MATCH ?
 		  AND k = ?
 		ORDER BY distance ASC
 	`, serialized, topK*3)
 	if err != nil {
-		return g.findSimilarTracesScan(queryEmb, topK)
+		return g.findSimilarEngramsScan(queryEmb, topK)
 	}
 	defer rows.Close()
 
@@ -441,9 +441,9 @@ func (g *DB) findSimilarTracesVec(queryEmb []float64, topK int) ([]string, error
 	return result, nil
 }
 
-// findSimilarTracesScan is the O(n) fallback used when sqlite-vec is unavailable.
-func (g *DB) findSimilarTracesScan(queryEmb []float64, topK int) ([]string, error) {
-	rows, err := g.db.Query(`SELECT id, embedding FROM traces WHERE embedding IS NOT NULL`)
+// findSimilarEngramsScan is the O(n) fallback used when sqlite-vec is unavailable.
+func (g *DB) findSimilarEngramsScan(queryEmb []float64, topK int) ([]string, error) {
+	rows, err := g.db.Query(`SELECT id, embedding FROM engrams WHERE embedding IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -484,46 +484,46 @@ func (g *DB) findSimilarTracesScan(queryEmb []float64, topK int) ([]string, erro
 	return result, nil
 }
 
-// SimilarTrace represents a trace ID with its similarity score
-type SimilarTrace struct {
+// SimilarEngram represents a trace ID with its similarity score
+type SimilarEngram struct {
 	ID         string
 	Similarity float64
 }
 
-// FindSimilarTracesAboveThreshold finds all traces with cosine similarity above the given threshold.
+// FindSimilarEngramsAboveThreshold finds all traces with cosine similarity above the given threshold.
 // Returns trace IDs with their raw similarity scores. Used for creating SIMILAR_TO edges.
-func (g *DB) FindSimilarTracesAboveThreshold(queryEmb []float64, threshold float64, excludeID string) ([]SimilarTrace, error) {
+func (g *DB) FindSimilarEngramsAboveThreshold(queryEmb []float64, threshold float64, excludeID string) ([]SimilarEngram, error) {
 	if g.vecAvailable && g.vecDim > 0 && len(queryEmb) == g.vecDim {
-		return g.findSimilarTracesAboveThresholdVec(queryEmb, threshold, excludeID)
+		return g.findSimilarEngramsAboveThresholdVec(queryEmb, threshold, excludeID)
 	}
-	return g.findSimilarTracesAboveThresholdScan(queryEmb, threshold, excludeID)
+	return g.findSimilarEngramsAboveThresholdScan(queryEmb, threshold, excludeID)
 }
 
-// findSimilarTracesAboveThresholdVec uses vec0 for fast threshold-filtered cosine search.
+// findSimilarEngramsAboveThresholdVec uses vec0 for fast threshold-filtered cosine search.
 // Vectors stored normalized → L2_threshold = sqrt(2 * cosine_dist_threshold).
 // Similarity returned as cosine_sim = 1 - L2²/2.
-func (g *DB) findSimilarTracesAboveThresholdVec(queryEmb []float64, threshold float64, excludeID string) ([]SimilarTrace, error) {
+func (g *DB) findSimilarEngramsAboveThresholdVec(queryEmb []float64, threshold float64, excludeID string) ([]SimilarEngram, error) {
 	emb32 := normalizeFloat32(float64ToFloat32(queryEmb))
 	serialized, err := sqlite_vec.SerializeFloat32(emb32)
 	if err != nil {
-		return g.findSimilarTracesAboveThresholdScan(queryEmb, threshold, excludeID)
+		return g.findSimilarEngramsAboveThresholdScan(queryEmb, threshold, excludeID)
 	}
 	// Convert cosine threshold to L2 distance threshold for normalized vectors
 	maxL2Distance := cosineDistToL2(1.0 - threshold)
 
 	rows, err := g.db.Query(`
-		SELECT trace_id, distance
-		FROM trace_vec
+		SELECT engram_id, distance
+		FROM engram_vec
 		WHERE embedding MATCH ?
 		  AND k = 200
 		ORDER BY distance ASC
 	`, serialized)
 	if err != nil {
-		return g.findSimilarTracesAboveThresholdScan(queryEmb, threshold, excludeID)
+		return g.findSimilarEngramsAboveThresholdScan(queryEmb, threshold, excludeID)
 	}
 	defer rows.Close()
 
-	var result []SimilarTrace
+	var result []SimilarEngram
 	for rows.Next() {
 		var id string
 		var distance float64
@@ -536,20 +536,20 @@ func (g *DB) findSimilarTracesAboveThresholdVec(queryEmb []float64, threshold fl
 		if id == excludeID {
 			continue
 		}
-		result = append(result, SimilarTrace{ID: id, Similarity: l2ToCosineSim(distance)})
+		result = append(result, SimilarEngram{ID: id, Similarity: l2ToCosineSim(distance)})
 	}
 	return result, nil
 }
 
-// findSimilarTracesAboveThresholdScan is the O(n) fallback.
-func (g *DB) findSimilarTracesAboveThresholdScan(queryEmb []float64, threshold float64, excludeID string) ([]SimilarTrace, error) {
-	rows, err := g.db.Query(`SELECT id, embedding FROM traces WHERE embedding IS NOT NULL AND id != ?`, excludeID)
+// findSimilarEngramsAboveThresholdScan is the O(n) fallback.
+func (g *DB) findSimilarEngramsAboveThresholdScan(queryEmb []float64, threshold float64, excludeID string) ([]SimilarEngram, error) {
+	rows, err := g.db.Query(`SELECT id, embedding FROM engrams WHERE embedding IS NOT NULL AND id != ?`, excludeID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var result []SimilarTrace
+	var result []SimilarEngram
 	for rows.Next() {
 		var id string
 		var embBytes []byte
@@ -564,7 +564,7 @@ func (g *DB) findSimilarTracesAboveThresholdScan(queryEmb []float64, threshold f
 
 		sim := cosineSimilarity(queryEmb, embedding)
 		if sim >= threshold {
-			result = append(result, SimilarTrace{ID: id, Similarity: sim})
+			result = append(result, SimilarEngram{ID: id, Similarity: sim})
 		}
 	}
 	return result, nil
@@ -624,7 +624,7 @@ func (g *DB) Retrieve(queryEmb []float64, queryText string, limit int) (*Retriev
 		phase1IDs[i] = c.id
 	}
 	stopPhase1 := func() {}
-	l8Map, err := g.GetTracesBatchAtLevel(phase1IDs, 8)
+	l8Map, err := g.GetEngramsBatchAtLevel(phase1IDs, 8)
 	stopPhase1()
 	if err != nil {
 		// Fall back to direct full-detail fetch on error
@@ -681,7 +681,7 @@ func (g *DB) Retrieve(queryEmb []float64, queryText string, limit int) (*Retriev
 		topIDs[i] = c.id
 	}
 	stopPhase2 := func() {}
-	traceMap, err := g.GetTracesBatch(topIDs)
+	traceMap, err := g.GetEngramsBatch(topIDs)
 	stopPhase2()
 	if err != nil {
 		return nil, err
@@ -694,16 +694,16 @@ func (g *DB) Retrieve(queryEmb []float64, queryText string, limit int) (*Retriev
 			continue
 		}
 		act := c.activation
-		if !isStatusQuery && trace.TraceType == TraceTypeOperational {
+		if !isStatusQuery && trace.EngramType == EngramTypeOperational {
 			act *= 0.5
 		}
 		trace.Activation = act
-		result.Traces = append(result.Traces, trace)
+		result.Engrams = append(result.Engrams, trace)
 	}
 
 	// Re-sort after applying operational bias (may reorder results)
-	sort.Slice(result.Traces, func(i, j int) bool {
-		return result.Traces[i].Activation > result.Traces[j].Activation
+	sort.Slice(result.Engrams, func(i, j int) bool {
+		return result.Engrams[i].Activation > result.Engrams[j].Activation
 	})
 
 	return result, nil
@@ -720,7 +720,7 @@ func (g *DB) RetrieveWithContext(queryEmb []float64, queryText string, contextTr
 	seedSet := make(map[string]bool)
 
 	// Trigger 1: Semantic similarity (embedding-based)
-	semanticSeeds, err := g.FindSimilarTraces(queryEmb, 20)
+	semanticSeeds, err := g.FindSimilarEngrams(queryEmb, 20)
 	if err == nil {
 		for _, id := range semanticSeeds {
 			seedSet[id] = true
@@ -729,7 +729,7 @@ func (g *DB) RetrieveWithContext(queryEmb []float64, queryText string, contextTr
 
 	// Trigger 2: Lexical matching
 	if queryText != "" {
-		lexicalSeeds, err := g.FindTracesWithKeywords(queryText, 20)
+		lexicalSeeds, err := g.FindEngramsWithKeywords(queryText, 20)
 		if err == nil {
 			for _, id := range lexicalSeeds {
 				seedSet[id] = true
@@ -742,7 +742,7 @@ func (g *DB) RetrieveWithContext(queryEmb []float64, queryText string, contextTr
 		matchedEntities, err := g.FindEntitiesByText(queryText, 5)
 		if err == nil {
 			for _, entity := range matchedEntities {
-				traceIDs, err := g.GetTracesForEntity(entity.ID)
+				traceIDs, err := g.GetEngramsForEntity(entity.ID)
 				if err != nil {
 					continue
 				}
@@ -818,7 +818,7 @@ func (g *DB) RetrieveWithContext(queryEmb []float64, queryText string, contextTr
 	for i, c := range phase1CandidatesCtx {
 		phase1IDsCtx[i] = c.id
 	}
-	l8MapCtx, err := g.GetTracesBatchAtLevel(phase1IDsCtx, 8)
+	l8MapCtx, err := g.GetEngramsBatchAtLevel(phase1IDsCtx, 8)
 	if err != nil {
 		l8MapCtx = nil
 	}
@@ -871,7 +871,7 @@ func (g *DB) RetrieveWithContext(queryEmb []float64, queryText string, contextTr
 	for i, c := range shortlistedCtx {
 		topIDsCtx[i] = c.id
 	}
-	traceMap, err := g.GetTracesBatch(topIDsCtx)
+	traceMap, err := g.GetEngramsBatch(topIDsCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -883,16 +883,16 @@ func (g *DB) RetrieveWithContext(queryEmb []float64, queryText string, contextTr
 			continue
 		}
 		act := c.activation
-		if !isStatusQuery && trace.TraceType == TraceTypeOperational {
+		if !isStatusQuery && trace.EngramType == EngramTypeOperational {
 			act *= 0.5
 		}
 		trace.Activation = act
-		result.Traces = append(result.Traces, trace)
+		result.Engrams = append(result.Engrams, trace)
 	}
 
 	// Re-sort after applying operational bias (may reorder results)
-	sort.Slice(result.Traces, func(i, j int) bool {
-		return result.Traces[i].Activation > result.Traces[j].Activation
+	sort.Slice(result.Engrams, func(i, j int) bool {
+		return result.Engrams[i].Activation > result.Engrams[j].Activation
 	})
 
 	return result, nil
@@ -971,7 +971,7 @@ func applySigmoid(activation map[string]float64) map[string]float64 {
 // BoostActivation boosts activation for specific traces (e.g., from percept similarity)
 func (g *DB) BoostActivation(traceIDs []string, boost float64, threshold float64) error {
 	for _, id := range traceIDs {
-		trace, err := g.GetTrace(id)
+		trace, err := g.GetEngram(id)
 		if err != nil || trace == nil {
 			continue
 		}
@@ -982,7 +982,7 @@ func (g *DB) BoostActivation(traceIDs []string, boost float64, threshold float64
 		}
 
 		if newActivation >= threshold {
-			g.UpdateTraceActivation(id, newActivation)
+			g.UpdateEngramActivation(id, newActivation)
 		}
 	}
 	return nil

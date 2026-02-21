@@ -339,141 +339,141 @@ func TestIsAllLowInfo(t *testing.T) {
 	}
 }
 
-func TestClassifyTraceType(t *testing.T) {
+func TestClassifyEngramType(t *testing.T) {
 	tests := []struct {
 		name     string
 		summary  string
-		expected graph.TraceType
+		expected graph.EngramType
 	}{
 		{
 			name:     "meeting reminder",
 			summary:  "[Past] Bud: Upcoming meeting in 10 minutes: Sprint planning",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "meeting reminder - starts soon",
 			summary:  "[Past] Bud: Sprint Planning for Nightshade starts soon",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "meeting reminder - starts in with time",
 			summary:  "[Past] Bud: Heads up - DevOps Sprint Planning starts in 13m37s.",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "meeting reminder - Google Meet link",
 			summary:  "[Past] Bud: Upcoming DevOps Sprint Planning meeting starting soon https://meet.google.com/abc-defg-hij",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "meeting reminder - meeting starts",
 			summary:  "[Past] Bud: DA Sprint Planning meeting starts in 10 minutes",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "meeting reminder - scheduled to start soon",
 			summary:  "[Past] An unblock light node development meeting is scheduled to start soon; the link is provided.",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "state sync",
 			summary:  "[Past] Bud: State sync completed, pushed changes",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "idle wake",
 			summary:  "[Past] No actionable work found during wake",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "knowledge - decision",
 			summary:  "[Past] Decided to use Redis for caching",
-			expected: graph.TraceTypeKnowledge,
+			expected: graph.EngramTypeKnowledge,
 		},
 		{
 			name:     "knowledge - preference",
 			summary:  "[Past] User prefers morning check-ins",
-			expected: graph.TraceTypeKnowledge,
+			expected: graph.EngramTypeKnowledge,
 		},
 		{
 			name:     "knowledge - fact",
 			summary:  "[Past] Sarah is the new PM for Project Alpha",
-			expected: graph.TraceTypeKnowledge,
+			expected: graph.EngramTypeKnowledge,
 		},
 		{
 			name:     "knowledge - meeting discussion",
 			summary:  "[Past] We discussed the sprint planning process and decided to move it to Mondays",
-			expected: graph.TraceTypeKnowledge,
+			expected: graph.EngramTypeKnowledge,
 		},
 		// Dev work patterns - operational (no decision rationale)
 		{
 			name:     "dev work - updated",
 			summary:  "[Past] Updated Budget to use output tokens",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "dev work - implemented",
 			summary:  "[Past] Implemented FOLLOWS edges between episodes",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "dev work - fixed",
 			summary:  "[Past] Fixed token metrics display",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "dev work - added",
 			summary:  "[Past] Added entity extraction to Bud responses",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "dev work - explored",
 			summary:  "[Past] Explored WNUT 2017 NER benchmark for entity extraction",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "dev work - researched",
 			summary:  "[Past] Researched spreading activation parameters",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		{
 			name:     "dev work - pruned",
 			summary:  "[Past] Pruned 32 bad PRODUCT entities from the database",
-			expected: graph.TraceTypeOperational,
+			expected: graph.EngramTypeOperational,
 		},
 		// Dev work with knowledge indicators - should stay knowledge
 		{
 			name:     "dev work - with decision",
 			summary:  "[Past] Updated caching layer because Redis was causing latency issues",
-			expected: graph.TraceTypeKnowledge,
+			expected: graph.EngramTypeKnowledge,
 		},
 		{
 			name:     "dev work - with finding",
 			summary:  "[Past] Explored entropy filter and finding was that it blocks all user messages",
-			expected: graph.TraceTypeKnowledge,
+			expected: graph.EngramTypeKnowledge,
 		},
 		{
 			name:     "dev work - with root cause",
 			summary:  "[Past] Fixed entity extraction bug, root cause was missing null check",
-			expected: graph.TraceTypeKnowledge,
+			expected: graph.EngramTypeKnowledge,
 		},
 		{
 			name:     "dev work - with approach",
 			summary:  "[Past] Implemented two-pass extraction approach for better precision",
-			expected: graph.TraceTypeKnowledge,
+			expected: graph.EngramTypeKnowledge,
 		},
 		{
 			name:     "dev work - with chose",
 			summary:  "[Past] Refactored auth module, chose JWT over sessions for scalability",
-			expected: graph.TraceTypeKnowledge,
+			expected: graph.EngramTypeKnowledge,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := classifyTraceType(tc.summary, nil)
+			result := classifyEngramType(tc.summary, nil)
 			if result != tc.expected {
-				t.Errorf("classifyTraceType(%q) = %v, expected %v", tc.summary, result, tc.expected)
+				t.Errorf("classifyEngramType(%q) = %v, expected %v", tc.summary, result, tc.expected)
 			}
 		})
 	}
@@ -569,9 +569,9 @@ func TestCalculateCentroidNoEmbeddings(t *testing.T) {
 	}
 }
 
-// TestLinkEpisodesToRelatedTraces verifies that episodes are linked to semantically
+// TestLinkEpisodesToRelatedEngrams verifies that episodes are linked to semantically
 // similar existing traces via episode_trace_edges.
-func TestLinkEpisodesToRelatedTraces(t *testing.T) {
+func TestLinkEpisodesToRelatedEngrams(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -580,41 +580,41 @@ func TestLinkEpisodesToRelatedTraces(t *testing.T) {
 	now := time.Now()
 
 	// Create an existing trace with a high-similarity embedding
-	existingTrace := &graph.Trace{
-		ID:        "trace-existing-abc",
+	existingTrace := &graph.Engram{
+		ID:        "engram-existing-abc",
 		Summary:   "Discussion about entity extraction and NER",
 		Topic:     "conversation",
-		TraceType: graph.TraceTypeKnowledge,
+		EngramType: graph.EngramTypeKnowledge,
 		Embedding: []float64{0.9, 0.1, 0.0, 0.0}, // Similar to episode below
 		CreatedAt: now.Add(-1 * time.Hour),
 	}
-	if err := db.AddTrace(existingTrace); err != nil {
+	if err := db.AddEngram(existingTrace); err != nil {
 		t.Fatalf("Failed to add existing trace: %v", err)
 	}
 
 	// Create a different trace with a low-similarity embedding (should not be linked)
-	distantTrace := &graph.Trace{
-		ID:        "trace-distant-xyz",
+	distantTrace := &graph.Engram{
+		ID:        "engram-distant-xyz",
 		Summary:   "Calendar event: sprint planning meeting",
 		Topic:     "conversation",
-		TraceType: graph.TraceTypeOperational,
+		EngramType: graph.EngramTypeOperational,
 		Embedding: []float64{0.0, 0.0, 0.9, 0.1}, // Very different
 		CreatedAt: now.Add(-2 * time.Hour),
 	}
-	if err := db.AddTrace(distantTrace); err != nil {
+	if err := db.AddEngram(distantTrace); err != nil {
 		t.Fatalf("Failed to add distant trace: %v", err)
 	}
 
 	// Create a primary trace that the episode will belong to
-	primaryTrace := &graph.Trace{
-		ID:        "trace-primary-episode",
+	primaryTrace := &graph.Engram{
+		ID:        "engram-primary-episode",
 		Summary:   "New episode about NER extraction quality",
 		Topic:     "conversation",
-		TraceType: graph.TraceTypeKnowledge,
+		EngramType: graph.EngramTypeKnowledge,
 		Embedding: []float64{0.8, 0.2, 0.0, 0.0},
 		CreatedAt: now,
 	}
-	if err := db.AddTrace(primaryTrace); err != nil {
+	if err := db.AddEngram(primaryTrace); err != nil {
 		t.Fatalf("Failed to add primary trace: %v", err)
 	}
 
@@ -632,12 +632,12 @@ func TestLinkEpisodesToRelatedTraces(t *testing.T) {
 	}
 
 	// Link episode to its primary trace
-	if err := db.LinkTraceToSource("trace-primary-episode", ep.ID); err != nil {
+	if err := db.LinkEngramToSource("engram-primary-episode", ep.ID); err != nil {
 		t.Fatalf("Failed to link episode to primary trace: %v", err)
 	}
 
 	// Run the linking function
-	linked := c.linkEpisodesToRelatedTraces([]*graph.Episode{ep})
+	linked := c.linkEpisodesToRelatedEngrams([]*graph.Episode{ep})
 
 	// Should have linked to existingTrace (similarity ~0.99 > 0.80)
 	// Should NOT have linked to distantTrace (similarity ~0.0 < 0.80)
@@ -647,30 +647,30 @@ func TestLinkEpisodesToRelatedTraces(t *testing.T) {
 	}
 
 	// Verify the edge exists to existingTrace
-	traceIDs, err := db.GetTracesReferencedByEpisode(ep.ID)
+	traceIDs, err := db.GetEngramsReferencedByEpisode(ep.ID)
 	if err != nil {
-		t.Fatalf("GetTracesReferencedByEpisode failed: %v", err)
+		t.Fatalf("GetEngramsReferencedByEpisode failed: %v", err)
 	}
 	if len(traceIDs) != 1 {
 		t.Fatalf("Expected 1 trace reference, got %d: %v", len(traceIDs), traceIDs)
 	}
-	if traceIDs[0] != "trace-existing-abc" {
+	if traceIDs[0] != "engram-existing-abc" {
 		t.Errorf("Expected link to trace-existing-abc, got %s", traceIDs[0])
 	}
 
 	// Verify no link to the primary trace or distant trace
 	for _, id := range traceIDs {
-		if id == "trace-primary-episode" {
+		if id == "engram-primary-episode" {
 			t.Error("Should not have linked episode to its own primary trace")
 		}
-		if id == "trace-distant-xyz" {
+		if id == "engram-distant-xyz" {
 			t.Error("Should not have linked episode to dissimilar trace")
 		}
 	}
 }
 
-// TestLinkEpisodesToRelatedTracesNoEmbedding verifies episodes without embeddings are skipped.
-func TestLinkEpisodesToRelatedTracesNoEmbedding(t *testing.T) {
+// TestLinkEpisodesToRelatedEngramsNoEmbedding verifies episodes without embeddings are skipped.
+func TestLinkEpisodesToRelatedEngramsNoEmbedding(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -685,7 +685,7 @@ func TestLinkEpisodesToRelatedTracesNoEmbedding(t *testing.T) {
 		Embedding:      nil, // No embedding
 	}
 
-	linked := c.linkEpisodesToRelatedTraces([]*graph.Episode{ep})
+	linked := c.linkEpisodesToRelatedEngrams([]*graph.Episode{ep})
 	if linked != 0 {
 		t.Errorf("Expected 0 links for episode without embedding, got %d", linked)
 	}

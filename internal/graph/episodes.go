@@ -2,7 +2,6 @@ package graph
 
 import (
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -10,10 +9,10 @@ import (
 	"github.com/zeebo/blake3"
 )
 
-// generateShortID creates a 5-character ID from BLAKE3 hash of the full ID
+// generateShortID creates a 5-character display ID from BLAKE3 hash (kept for migration use)
 func generateShortID(id string) string {
 	hash := blake3.Sum256([]byte(id))
-	return hex.EncodeToString(hash[:])[:5]
+	return fmt.Sprintf("%x", hash[:])[:5]
 }
 
 // AddEpisode adds a new episode to the graph
@@ -34,21 +33,16 @@ func (g *DB) AddEpisode(ep *Episode) error {
 		ep.CreatedAt = time.Now()
 	}
 
-	// Generate short ID if not set
-	if ep.ShortID == "" {
-		ep.ShortID = generateShortID(ep.ID)
-	}
-
 	// Compute token count if not set
 	if ep.TokenCount == 0 {
 		ep.TokenCount = estimateTokens(ep.Content)
 	}
 
 	_, err = g.db.Exec(`
-		INSERT INTO episodes (id, short_id, content, token_count, source, author, author_id, channel,
+		INSERT INTO episodes (id, content, token_count, source, author, author_id, channel,
 			timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
 			embedding, reply_to, authorization_checked, has_authorization, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			content = excluded.content,
 			token_count = excluded.token_count,
@@ -57,7 +51,7 @@ func (g *DB) AddEpisode(ep *Episode) error {
 			authorization_checked = excluded.authorization_checked,
 			has_authorization = excluded.has_authorization
 	`,
-		ep.ID, ep.ShortID, ep.Content, ep.TokenCount, ep.Source, ep.Author, ep.AuthorID, ep.Channel,
+		ep.ID, ep.Content, ep.TokenCount, ep.Source, ep.Author, ep.AuthorID, ep.Channel,
 		ep.TimestampEvent, ep.TimestampIngested, ep.DialogueAct, ep.EntropyScore,
 		embeddingBytes, ep.ReplyTo, ep.AuthorizationChecked, ep.HasAuthorization, ep.CreatedAt,
 	)
@@ -84,7 +78,7 @@ func (g *DB) GetAllEpisodes(limit int) ([]*Episode, error) {
 	}
 
 	rows, err := g.db.Query(`
-		SELECT id, short_id, content, token_count, source, author, author_id, channel,
+		SELECT id, content, token_count, source, author, author_id, channel,
 			timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
 			embedding, reply_to, authorization_checked, has_authorization, created_at
 		FROM episodes
@@ -118,23 +112,11 @@ func (g *DB) CountEpisodes() (int, error) {
 // GetEpisode retrieves an episode by ID
 func (g *DB) GetEpisode(id string) (*Episode, error) {
 	row := g.db.QueryRow(`
-		SELECT id, short_id, content, token_count, source, author, author_id, channel,
+		SELECT id, content, token_count, source, author, author_id, channel,
 			timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
 			embedding, reply_to, authorization_checked, has_authorization, created_at
 		FROM episodes WHERE id = ?
 	`, id)
-
-	return scanEpisode(row)
-}
-
-// GetEpisodeByShortID retrieves an episode by its short ID
-func (g *DB) GetEpisodeByShortID(shortID string) (*Episode, error) {
-	row := g.db.QueryRow(`
-		SELECT id, short_id, content, token_count, source, author, author_id, channel,
-			timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
-			embedding, reply_to, authorization_checked, has_authorization, created_at
-		FROM episodes WHERE short_id = ?
-	`, shortID)
 
 	return scanEpisode(row)
 }
@@ -145,8 +127,7 @@ func (g *DB) GetEpisodes(ids []string) ([]*Episode, error) {
 		return nil, nil
 	}
 
-	// Build query with placeholders
-	query := `SELECT id, short_id, content, token_count, source, author, author_id, channel,
+	query := `SELECT id, content, token_count, source, author, author_id, channel,
 		timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
 		embedding, reply_to, authorization_checked, has_authorization, created_at FROM episodes WHERE id IN (`
 	args := make([]interface{}, len(ids))
@@ -178,8 +159,6 @@ func (g *DB) GetEpisodes(ids []string) ([]*Episode, error) {
 }
 
 // GetRecentEpisodes retrieves the most recent episodes, optionally filtered by channel.
-// Omits the embedding column (large JSON blob) since callers use content/metadata only.
-// Removed time-based filtering - we now rely on episode count and pyramid compression
 func (g *DB) GetRecentEpisodes(channel string, limit int) ([]*Episode, error) {
 	if limit <= 0 {
 		limit = 30
@@ -190,7 +169,7 @@ func (g *DB) GetRecentEpisodes(channel string, limit int) ([]*Episode, error) {
 
 	if channel != "" {
 		rows, err = g.db.Query(`
-			SELECT id, short_id, content, token_count, source, author, author_id, channel,
+			SELECT id, content, token_count, source, author, author_id, channel,
 				timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
 				reply_to, authorization_checked, has_authorization, created_at
 			FROM episodes
@@ -200,7 +179,7 @@ func (g *DB) GetRecentEpisodes(channel string, limit int) ([]*Episode, error) {
 		`, channel, limit)
 	} else {
 		rows, err = g.db.Query(`
-			SELECT id, short_id, content, token_count, source, author, author_id, channel,
+			SELECT id, content, token_count, source, author, author_id, channel,
 				timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
 				reply_to, authorization_checked, has_authorization, created_at
 			FROM episodes
@@ -229,7 +208,7 @@ func (g *DB) GetRecentEpisodes(channel string, limit int) ([]*Episode, error) {
 // GetEpisodeReplies returns all episodes that reply to the given episode
 func (g *DB) GetEpisodeReplies(id string) ([]*Episode, error) {
 	rows, err := g.db.Query(`
-		SELECT e.id, e.short_id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
+		SELECT e.id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
 			e.timestamp_event, e.timestamp_ingested, e.dialogue_act, e.entropy_score,
 			e.embedding, e.reply_to, e.authorization_checked, e.has_authorization, e.created_at
 		FROM episodes e
@@ -291,27 +270,24 @@ func (g *DB) GetEpisodeNeighbors(id string) ([]Neighbor, error) {
 	return neighbors, nil
 }
 
-// GetUnconsolidatedEpisodeCount returns the count of episodes not yet linked to any trace.
-// Cheap query used by the consolidation trigger to decide whether to run.
+// GetUnconsolidatedEpisodeCount returns the count of episodes not yet linked to any engram.
 func (g *DB) GetUnconsolidatedEpisodeCount() (int, error) {
 	var count int
 	err := g.db.QueryRow(`
 		SELECT COUNT(*) FROM episodes e
 		WHERE NOT EXISTS (
-			SELECT 1 FROM trace_sources ts WHERE ts.episode_id = e.id
+			SELECT 1 FROM engram_episodes ee WHERE ee.episode_id = e.id
 		)
 	`).Scan(&count)
 	return count, err
 }
 
-// GetUnconsolidatedEpisodeIDsForChannel returns a set of unconsolidated episode IDs
-// for a specific channel. Used by the variable conversation buffer to extend coverage
-// beyond the base 30 episodes for episodes that haven't been consolidated yet.
+// GetUnconsolidatedEpisodeIDsForChannel returns unconsolidated episode IDs for a channel.
 func (g *DB) GetUnconsolidatedEpisodeIDsForChannel(channelID string) (map[string]bool, error) {
 	rows, err := g.db.Query(`
 		SELECT e.id FROM episodes e
-		LEFT JOIN trace_sources ts ON ts.episode_id = e.id
-		WHERE e.channel = ? AND ts.trace_id IS NULL
+		LEFT JOIN engram_episodes ee ON ee.episode_id = e.id
+		WHERE e.channel = ? AND ee.engram_id IS NULL
 	`, channelID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query unconsolidated episode IDs: %w", err)
@@ -329,20 +305,19 @@ func (g *DB) GetUnconsolidatedEpisodeIDsForChannel(channelID string) (map[string
 	return result, nil
 }
 
-// GetUnconsolidatedEpisodes returns episodes that haven't been linked to any trace yet.
-// These are candidates for consolidation.
+// GetUnconsolidatedEpisodes returns episodes that haven't been linked to any engram yet.
 func (g *DB) GetUnconsolidatedEpisodes(limit int) ([]*Episode, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 
 	rows, err := g.db.Query(`
-		SELECT e.id, e.short_id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
+		SELECT e.id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
 			e.timestamp_event, e.timestamp_ingested, e.dialogue_act, e.entropy_score,
 			e.embedding, e.reply_to, e.authorization_checked, e.has_authorization, e.created_at
 		FROM episodes e
-		LEFT JOIN trace_sources ts ON ts.episode_id = e.id
-		WHERE ts.trace_id IS NULL
+		LEFT JOIN engram_episodes ee ON ee.episode_id = e.id
+		WHERE ee.engram_id IS NULL
 		ORDER BY e.timestamp_event ASC
 		LIMIT ?
 	`, limit)
@@ -363,21 +338,18 @@ func (g *DB) GetUnconsolidatedEpisodes(limit int) ([]*Episode, error) {
 	return episodes, nil
 }
 
-// GetConsolidatedEpisodesWithEmbeddings returns episodes that have embeddings
-// and are linked to at least one trace (i.e., already consolidated).
-// Used for backfilling episode_trace_edges.
-// offset/limit support pagination for large datasets.
+// GetConsolidatedEpisodesWithEmbeddings returns episodes that have embeddings and are linked to at least one engram.
 func (g *DB) GetConsolidatedEpisodesWithEmbeddings(offset, limit int) ([]*Episode, error) {
 	if limit <= 0 {
 		limit = 500
 	}
 
 	rows, err := g.db.Query(`
-		SELECT DISTINCT e.id, e.short_id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
+		SELECT DISTINCT e.id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
 			e.timestamp_event, e.timestamp_ingested, e.dialogue_act, e.entropy_score,
 			e.embedding, e.reply_to, e.authorization_checked, e.has_authorization, e.created_at
 		FROM episodes e
-		INNER JOIN trace_sources ts ON ts.episode_id = e.id
+		INNER JOIN engram_episodes ee ON ee.episode_id = e.id
 		WHERE e.embedding IS NOT NULL
 		ORDER BY e.timestamp_event ASC
 		LIMIT ? OFFSET ?
@@ -434,13 +406,12 @@ func (g *DB) GetEpisodeEntities(episodeID string) ([]string, error) {
 func scanEpisode(row *sql.Row) (*Episode, error) {
 	var ep Episode
 	var embeddingBytes []byte
-	var shortID sql.NullString
 	var author, authorID, channel, dialogueAct, replyTo sql.NullString
 	var entropyScore sql.NullFloat64
 	var authChecked, hasAuth sql.NullBool
 
 	err := row.Scan(
-		&ep.ID, &shortID, &ep.Content, &ep.TokenCount, &ep.Source, &author, &authorID, &channel,
+		&ep.ID, &ep.Content, &ep.TokenCount, &ep.Source, &author, &authorID, &channel,
 		&ep.TimestampEvent, &ep.TimestampIngested, &dialogueAct, &entropyScore,
 		&embeddingBytes, &replyTo, &authChecked, &hasAuth, &ep.CreatedAt,
 	)
@@ -451,7 +422,6 @@ func scanEpisode(row *sql.Row) (*Episode, error) {
 		return nil, err
 	}
 
-	ep.ShortID = shortID.String
 	ep.Author = author.String
 	ep.AuthorID = authorID.String
 	ep.Channel = channel.String
@@ -472,13 +442,12 @@ func scanEpisode(row *sql.Row) (*Episode, error) {
 func scanEpisodeRow(rows *sql.Rows) (*Episode, error) {
 	var ep Episode
 	var embeddingBytes []byte
-	var shortID sql.NullString
 	var author, authorID, channel, dialogueAct, replyTo sql.NullString
 	var entropyScore sql.NullFloat64
 	var authChecked, hasAuth sql.NullBool
 
 	err := rows.Scan(
-		&ep.ID, &shortID, &ep.Content, &ep.TokenCount, &ep.Source, &author, &authorID, &channel,
+		&ep.ID, &ep.Content, &ep.TokenCount, &ep.Source, &author, &authorID, &channel,
 		&ep.TimestampEvent, &ep.TimestampIngested, &dialogueAct, &entropyScore,
 		&embeddingBytes, &replyTo, &authChecked, &hasAuth, &ep.CreatedAt,
 	)
@@ -486,7 +455,6 @@ func scanEpisodeRow(rows *sql.Rows) (*Episode, error) {
 		return nil, err
 	}
 
-	ep.ShortID = shortID.String
 	ep.Author = author.String
 	ep.AuthorID = authorID.String
 	ep.Channel = channel.String
@@ -504,16 +472,14 @@ func scanEpisodeRow(rows *sql.Rows) (*Episode, error) {
 }
 
 // scanEpisodeRowNoEmbedding scans episode rows from queries that omit the embedding column.
-// Use with queries that SELECT without embedding to avoid the JSON-unmarshal overhead.
 func scanEpisodeRowNoEmbedding(rows *sql.Rows) (*Episode, error) {
 	var ep Episode
-	var shortID sql.NullString
 	var author, authorID, channel, dialogueAct, replyTo sql.NullString
 	var entropyScore sql.NullFloat64
 	var authChecked, hasAuth sql.NullBool
 
 	err := rows.Scan(
-		&ep.ID, &shortID, &ep.Content, &ep.TokenCount, &ep.Source, &author, &authorID, &channel,
+		&ep.ID, &ep.Content, &ep.TokenCount, &ep.Source, &author, &authorID, &channel,
 		&ep.TimestampEvent, &ep.TimestampIngested, &dialogueAct, &entropyScore,
 		&replyTo, &authChecked, &hasAuth, &ep.CreatedAt,
 	)
@@ -521,7 +487,6 @@ func scanEpisodeRowNoEmbedding(rows *sql.Rows) (*Episode, error) {
 		return nil, err
 	}
 
-	ep.ShortID = shortID.String
 	ep.Author = author.String
 	ep.AuthorID = authorID.String
 	ep.Channel = channel.String

@@ -410,10 +410,10 @@ func (g *DB) GetEpisodesForEntity(entityID string) ([]string, error) {
 	return ids, nil
 }
 
-// GetTracesForEntity returns all traces that involve an entity
-func (g *DB) GetTracesForEntity(entityID string) ([]string, error) {
+// GetEngramsForEntity returns all engrams that involve an entity
+func (g *DB) GetEngramsForEntity(entityID string) ([]string, error) {
 	rows, err := g.db.Query(`
-		SELECT trace_id FROM trace_entities WHERE entity_id = ?
+		SELECT engram_id FROM engram_entities WHERE entity_id = ?
 	`, entityID)
 	if err != nil {
 		return nil, err
@@ -431,9 +431,9 @@ func (g *DB) GetTracesForEntity(entityID string) ([]string, error) {
 	return ids, nil
 }
 
-// GetTracesForEntitiesBatch returns up to capPerEntity trace IDs for each of the given
+// GetEngramsForEntitiesBatch returns up to capPerEntity engram IDs for each of the given
 // entity IDs in a single SQL query, deduplicated.
-func (g *DB) GetTracesForEntitiesBatch(entityIDs []string, capPerEntity int) ([]string, error) {
+func (g *DB) GetEngramsForEntitiesBatch(entityIDs []string, capPerEntity int) ([]string, error) {
 	if len(entityIDs) == 0 {
 		return nil, nil
 	}
@@ -444,7 +444,7 @@ func (g *DB) GetTracesForEntitiesBatch(entityIDs []string, capPerEntity int) ([]
 		args[i] = id
 	}
 	query := fmt.Sprintf(`
-		SELECT entity_id, trace_id FROM trace_entities
+		SELECT entity_id, engram_id FROM engram_entities
 		WHERE entity_id IN (%s)
 		ORDER BY entity_id
 	`, strings.Join(placeholders, ","))
@@ -456,23 +456,23 @@ func (g *DB) GetTracesForEntitiesBatch(entityIDs []string, capPerEntity int) ([]
 	defer rows.Close()
 
 	// Collect up to capPerEntity per entity, deduplicate overall
-	seenTraces := make(map[string]bool)
+	seenEngrams := make(map[string]bool)
 	countPerEntity := make(map[string]int)
 	var result []string
 	for rows.Next() {
-		var entityID, traceID string
-		if err := rows.Scan(&entityID, &traceID); err != nil {
+		var entityID, engramID string
+		if err := rows.Scan(&entityID, &engramID); err != nil {
 			continue
 		}
 		if countPerEntity[entityID] >= capPerEntity {
 			continue
 		}
-		if seenTraces[traceID] {
+		if seenEngrams[engramID] {
 			continue
 		}
 		countPerEntity[entityID]++
-		seenTraces[traceID] = true
-		result = append(result, traceID)
+		seenEngrams[engramID] = true
+		result = append(result, engramID)
 	}
 	return result, nil
 }

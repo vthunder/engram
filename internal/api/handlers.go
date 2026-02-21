@@ -1,14 +1,12 @@
 package api
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/vthunder/engram/internal/consolidate"
 	"github.com/vthunder/engram/internal/embed"
 	"github.com/vthunder/engram/internal/graph"
@@ -65,7 +63,7 @@ func (s *Services) handleIngestEpisode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	id := fmt.Sprintf("ep-%s", uuid.New().String())
+	id := graph.GenerateEpisodeID(req.Content, req.Source, req.TimestampEvent.UnixNano())
 	ep := &graph.Episode{
 		ID:             id,
 		Content:        req.Content,
@@ -91,8 +89,9 @@ func (s *Services) handleIngestEpisode(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, e := range resp.Entities {
+				entityID := "ent:" + e.Text
 				entity := &graph.Entity{
-					ID:   fmt.Sprintf("ent-%s", uuid.New().String()),
+					ID:   entityID,
 					Name: e.Text,
 					Type: graph.EntityType(e.Label),
 				}
@@ -105,8 +104,7 @@ func (s *Services) handleIngestEpisode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]string{
-		"id":       ep.ID,
-		"short_id": ep.ShortID,
+		"id": ep.ID,
 	})
 }
 
@@ -125,12 +123,13 @@ func (s *Services) handleIngestThought(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := fmt.Sprintf("ep-%s", uuid.New().String())
+	now := time.Now()
+	id := graph.GenerateEpisodeID(req.Content, "thought", now.UnixNano())
 	ep := &graph.Episode{
 		ID:             id,
 		Content:        req.Content,
 		Source:         "thought",
-		TimestampEvent: time.Now(),
+		TimestampEvent: now,
 	}
 	if err := s.Graph.AddEpisode(ep); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
@@ -155,8 +154,8 @@ func (s *Services) handleConsolidate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"traces_created": created,
-		"duration_ms":    time.Since(start).Milliseconds(),
+		"engrams_created": created,
+		"duration_ms":     time.Since(start).Milliseconds(),
 	})
 }
 
@@ -196,15 +195,15 @@ func (s *Services) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, t := range result.Traces {
+	for _, t := range result.Engrams {
 		t.Embedding = nil
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"traces": result.Traces})
+	writeJSON(w, http.StatusOK, map[string]any{"engrams": result.Engrams})
 }
 
-// --- Traces ---
+// --- Engrams ---
 
-func (s *Services) handleListTraces(w http.ResponseWriter, r *http.Request) {
+func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 	// Optional threshold filter: ?threshold=0.1&limit=20
 	thresholdStr := r.URL.Query().Get("threshold")
 	limitStr := r.URL.Query().Get("limit")
@@ -221,25 +220,98 @@ func (s *Services) handleListTraces(w http.ResponseWriter, r *http.Request) {
 				limit = n
 			}
 		}
-		traces, err := s.Graph.GetActivatedTraces(threshold, limit)
+		engrams, err := s.Graph.GetActivatedEngrams(threshold, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, traces)
+		writeJSON(w, http.StatusOK, engrams)
 		return
 	}
 
-	traces, err := s.Graph.GetAllTraces()
+	engrams, err := s.Graph.GetAllEngrams()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, traces)
+	writeJSON(w, http.StatusOK, engrams)
 }
 
-// handleListEpisodes returns recent episodes for a channel, or unconsolidated episode IDs.
-// GET /v1/episodes?channel=X&limit=N&unconsolidated=true
+func (s *Services) handleGetEngram(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	engram, err := s.Graph.GetEngram(id)
+	if err != nil || engram == nil {
+		// Try prefix resolution
+		fullID, resolveErr := s.Graph.ResolveEngramID(id)
+		if resolveErr != nil {
+			writeError(w, http.StatusNotFound, "not_found", "engram not found")
+			return
+		}
+		engram, err = s.Graph.GetEngram(fullID)
+		if err != nil || engram == nil {
+			writeError(w, http.StatusNotFound, "not_found", "engram not found")
+			return
+		}
+	}
+
+	level := 1
+	if lv := r.URL.Query().Get("level"); lv != "" {
+		if n, err2 := strconv.Atoi(lv); err2 == nil {
+			level = n
+		}
+	}
+	if level > 0 {
+		if summary, err2 := s.Graph.GetEngramSummary(engram.ID, level); err2 == nil && summary != nil {
+			engram.Summary = summary.Summary
+		}
+	}
+
+	writeJSON(w, http.StatusOK, engram)
+}
+
+type engramContextResponse struct {
+	Engram   *graph.Engram   `json:"engram"`
+	Sources  []graph.Episode `json:"source_episodes"`
+	Entities []*graph.Entity `json:"linked_entities"`
+}
+
+func (s *Services) handleGetEngramContext(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	engram, err := s.Graph.GetEngram(id)
+	if err != nil || engram == nil {
+		// Try prefix resolution
+		fullID, resolveErr := s.Graph.ResolveEngramID(id)
+		if resolveErr != nil {
+			writeError(w, http.StatusNotFound, "not_found", "engram not found")
+			return
+		}
+		engram, err = s.Graph.GetEngram(fullID)
+		if err != nil || engram == nil {
+			writeError(w, http.StatusNotFound, "not_found", "engram not found")
+			return
+		}
+	}
+
+	sources, _ := s.Graph.GetEngramSourceEpisodes(engram.ID)
+	entityIDs, _ := s.Graph.GetEngramEntities(engram.ID)
+	var entities []*graph.Entity
+	for _, eid := range entityIDs {
+		if e, err2 := s.Graph.GetEntity(eid); err2 == nil {
+			entities = append(entities, e)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, engramContextResponse{
+		Engram:   engram,
+		Sources:  sources,
+		Entities: entities,
+	})
+}
+
+// --- Episodes ---
+
 func (s *Services) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 	channel := r.URL.Query().Get("channel")
 	unconsolidated := r.URL.Query().Get("unconsolidated") == "true"
@@ -308,103 +380,17 @@ func (s *Services) handleBatchEpisodeSummaries(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, result)
 }
 
-type boostTracesRequest struct {
-	TraceIDs  []string `json:"trace_ids"`
-	Boost     float64  `json:"boost"`
-	Threshold float64  `json:"threshold,omitempty"`
-}
-
-// handleBoostTraces boosts activation for a set of traces.
-// POST /v1/traces/boost
-func (s *Services) handleBoostTraces(w http.ResponseWriter, r *http.Request) {
-	var req boostTracesRequest
-	if err := decode(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-		return
-	}
-	if len(req.TraceIDs) == 0 {
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-		return
-	}
-	if req.Boost == 0 {
-		req.Boost = 0.1
-	}
-
-	if err := s.Graph.BoostActivation(req.TraceIDs, req.Boost, req.Threshold); err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-func (s *Services) handleGetTrace(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	trace, err := s.Graph.GetTrace(id)
-	if err != nil || trace == nil {
-		trace, err = s.Graph.GetTraceByShortID(id)
-		if err != nil || trace == nil {
-			writeError(w, http.StatusNotFound, "not_found", "trace not found")
-			return
-		}
-	}
-
-	level := 1
-	if lv := r.URL.Query().Get("level"); lv != "" {
-		if n, err2 := strconv.Atoi(lv); err2 == nil {
-			level = n
-		}
-	}
-	if level > 0 {
-		if summary, err2 := s.Graph.GetTraceSummary(trace.ID, level); err2 == nil && summary != nil {
-			trace.Summary = summary.Summary
-		}
-	}
-
-	writeJSON(w, http.StatusOK, trace)
-}
-
-type traceContextResponse struct {
-	Trace    *graph.Trace    `json:"trace"`
-	Sources  []graph.Episode `json:"source_episodes"`
-	Entities []*graph.Entity `json:"linked_entities"`
-}
-
-func (s *Services) handleGetTraceContext(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	trace, err := s.Graph.GetTrace(id)
-	if err != nil || trace == nil {
-		trace, err = s.Graph.GetTraceByShortID(id)
-		if err != nil || trace == nil {
-			writeError(w, http.StatusNotFound, "not_found", "trace not found")
-			return
-		}
-	}
-
-	sources, _ := s.Graph.GetTraceSourceEpisodes(trace.ID)
-	entityIDs, _ := s.Graph.GetTraceEntities(trace.ID)
-	var entities []*graph.Entity
-	for _, eid := range entityIDs {
-		if e, err2 := s.Graph.GetEntity(eid); err2 == nil {
-			entities = append(entities, e)
-		}
-	}
-
-	writeJSON(w, http.StatusOK, traceContextResponse{
-		Trace:    trace,
-		Sources:  sources,
-		Entities: entities,
-	})
-}
-
-// --- Episodes ---
-
 func (s *Services) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	ep, err := s.Graph.GetEpisode(id)
 	if err != nil || ep == nil {
-		ep, err = s.Graph.GetEpisodeByShortID(id)
+		// Try prefix resolution
+		fullID, resolveErr := s.Graph.ResolveEpisodeID(id)
+		if resolveErr != nil {
+			writeError(w, http.StatusNotFound, "not_found", "episode not found")
+			return
+		}
+		ep, err = s.Graph.GetEpisode(fullID)
 		if err != nil || ep == nil {
 			writeError(w, http.StatusNotFound, "not_found", "episode not found")
 			return
@@ -462,7 +448,7 @@ type reinforceRequest struct {
 	Alpha     float64   `json:"alpha,omitempty"`
 }
 
-func (s *Services) handleReinforceTrace(w http.ResponseWriter, r *http.Request) {
+func (s *Services) handleReinforceEngram(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req reinforceRequest
 	_ = decode(r, &req)
@@ -470,7 +456,36 @@ func (s *Services) handleReinforceTrace(w http.ResponseWriter, r *http.Request) 
 		req.Alpha = 0.3
 	}
 
-	if err := s.Graph.ReinforceTrace(id, req.Embedding, req.Alpha); err != nil {
+	if err := s.Graph.ReinforceEngram(id, req.Embedding, req.Alpha); err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+type boostEngramsRequest struct {
+	EngramIDs []string `json:"engram_ids"`
+	Boost     float64  `json:"boost"`
+	Threshold float64  `json:"threshold,omitempty"`
+}
+
+// handleBoostEngrams boosts activation for a set of engrams.
+// POST /v1/engrams/boost
+func (s *Services) handleBoostEngrams(w http.ResponseWriter, r *http.Request) {
+	var req boostEngramsRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(req.EngramIDs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	if req.Boost == 0 {
+		req.Boost = 0.1
+	}
+
+	if err := s.Graph.BoostActivation(req.EngramIDs, req.Boost, req.Threshold); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}

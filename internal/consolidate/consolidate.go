@@ -148,23 +148,23 @@ func (c *Consolidator) Run() (int, error) {
 
 		// Phase 2: Graph clustering using Claude-inferred edges
 		// Returns: new groups (to be consolidated) and existing traces with new episodes
-		newGroups, existingTracesWithNewEpisodes := c.clusterEpisodesByEdges(episodes, episodeEdges)
+		newGroups, existingEngramsWithNewEpisodes := c.clusterEpisodesByEdges(episodes, episodeEdges)
 
 		// Phase 3a: Add new episodes to existing traces and mark for reconsolidation
-		for traceID, newEpisodes := range existingTracesWithNewEpisodes {
+		for engramID, newEpisodes := range existingEngramsWithNewEpisodes {
 			for _, ep := range newEpisodes {
-				if err := c.graph.LinkTraceToSource(traceID, ep.ID); err != nil {
-					log.Printf("[consolidate] Failed to link episode %s to existing trace %s: %v", ep.ShortID, traceID, err)
+				if err := c.graph.LinkEngramToSource(engramID, ep.ID); err != nil {
+					log.Printf("[consolidate] Failed to link episode %s to existing trace %s: %v", ep.ID[:5], engramID, err)
 					continue
 				}
 			}
 			// Mark trace for reconsolidation
-			if err := c.graph.MarkTraceForReconsolidation(traceID); err != nil {
-				log.Printf("[consolidate] Failed to mark trace %s for reconsolidation: %v", traceID, err)
+			if err := c.graph.MarkEngramForReconsolidation(engramID); err != nil {
+				log.Printf("[consolidate] Failed to mark trace %s for reconsolidation: %v", engramID, err)
 			}
 		}
 
-		// Phase 3b: Create traces from new clustered groups
+		// Phase 3b: Create engrams from new clustered groups
 		created := 0
 		for i, group := range newGroups {
 			if err := c.consolidateGroup(group, i); err != nil {
@@ -176,23 +176,23 @@ func (c *Consolidator) Run() (int, error) {
 
 		totalCreated += created
 
-		// Phase 3c: Link episodes to semantically related existing traces (episode_trace_edges)
+		// Phase 3c: Link episodes to semantically related existing traces (episode_engram_edges)
 		// This captures cross-references between individual episodes and historical traces
 		// that they're related to but didn't consolidate into.
-		linked := c.linkEpisodesToRelatedTraces(episodes)
+		linked := c.linkEpisodesToRelatedEngrams(episodes)
 		if linked > 0 {
 			log.Printf("[consolidate] Created %d episode→trace cross-reference edges", linked)
 		}
 
 		// Phase 4: Batch reconsolidation of traces with new episodes
-		tracesNeedingRecon, err := c.graph.GetTracesNeedingReconsolidation()
+		engramsNeedingRecon, err := c.graph.GetEngramsNeedingReconsolidation()
 		if err != nil {
 			log.Printf("[consolidate] Failed to get traces needing reconsolidation: %v", err)
-		} else if len(tracesNeedingRecon) > 0 {
-			log.Printf("[consolidate] Reconsolidating %d traces with new episodes", len(tracesNeedingRecon))
-			for _, traceID := range tracesNeedingRecon {
-				if err := c.reconsolidateTrace(traceID); err != nil {
-					log.Printf("[consolidate] Failed to reconsolidate trace %s: %v", traceID, err)
+		} else if len(engramsNeedingRecon) > 0 {
+			log.Printf("[consolidate] Reconsolidating %d traces with new episodes", len(engramsNeedingRecon))
+			for _, engramID := range engramsNeedingRecon {
+				if err := c.reconsolidateEngram(engramID); err != nil {
+					log.Printf("[consolidate] Failed to reconsolidate trace %s: %v", engramID, err)
 				}
 			}
 		}
@@ -219,12 +219,12 @@ func (c *Consolidator) clusterEpisodesByEdges(episodes []*graph.Episode, edges [
 	}
 
 	// Check which episodes are already part of existing traces
-	episodeToTrace := make(map[string]string) // episode ID -> trace ID
+	episodeToEngram := make(map[string]string) // episode ID -> trace ID
 	for _, ep := range episodes {
-		traces, err := c.graph.GetEpisodeTraces(ep.ID)
-		if err == nil && len(traces) > 0 {
+		engrams, err := c.graph.GetEpisodeEngrams(ep.ID)
+		if err == nil && len(engrams) > 0 {
 			// Episode already belongs to a trace (should only be one, but take the first)
-			episodeToTrace[ep.ID] = traces[0]
+			episodeToEngram[ep.ID] = engrams[0]
 		}
 	}
 
@@ -240,10 +240,10 @@ func (c *Consolidator) clusterEpisodesByEdges(episodes []*graph.Episode, edges [
 	// Find connected components using DFS
 	visited := make(map[string]bool)
 	var newGroups []*episodeGroup
-	existingTracesWithNewEpisodes := make(map[string][]*graph.Episode)
+	existingEngramsWithNewEpisodes := make(map[string][]*graph.Episode)
 
-	var dfs func(episodeID string, group *episodeGroup, existingTraceID *string)
-	dfs = func(episodeID string, group *episodeGroup, existingTraceID *string) {
+	var dfs func(episodeID string, group *episodeGroup, existingEngramID *string)
+	dfs = func(episodeID string, group *episodeGroup, existingEngramID *string) {
 		if visited[episodeID] {
 			return
 		}
@@ -255,14 +255,14 @@ func (c *Consolidator) clusterEpisodesByEdges(episodes []*graph.Episode, edges [
 		}
 
 		// Check if this episode belongs to an existing trace
-		if traceID, ok := episodeToTrace[ep.ID]; ok {
+		if engramID, ok := episodeToEngram[ep.ID]; ok {
 			// Episode is already in a trace - mark this cluster as belonging to that trace
-			if *existingTraceID == "" {
-				*existingTraceID = traceID
-			} else if *existingTraceID != traceID {
+			if *existingEngramID == "" {
+				*existingEngramID = engramID
+			} else if *existingEngramID != engramID {
 				// Conflict: cluster spans multiple existing traces
 				// For now, prefer the first trace encountered
-				log.Printf("[consolidate] Warning: episode cluster spans multiple traces (%s, %s)", *existingTraceID, traceID)
+				log.Printf("[consolidate] Warning: episode cluster spans multiple traces (%s, %s)", *existingEngramID, engramID)
 			}
 		}
 
@@ -270,7 +270,7 @@ func (c *Consolidator) clusterEpisodesByEdges(episodes []*graph.Episode, edges [
 
 		// Visit neighbors
 		for _, neighborID := range adjacency[episodeID] {
-			dfs(neighborID, group, existingTraceID)
+			dfs(neighborID, group, existingEngramID)
 		}
 	}
 
@@ -284,9 +284,9 @@ func (c *Consolidator) clusterEpisodesByEdges(episodes []*graph.Episode, edges [
 			episodes:  []*graph.Episode{},
 			entityIDs: make(map[string]bool),
 		}
-		existingTraceID := ""
+		existingEngramID := ""
 
-		dfs(ep.ID, group, &existingTraceID)
+		dfs(ep.ID, group, &existingEngramID)
 
 		// Collect entities from all episodes in group
 		for _, e := range group.episodes {
@@ -300,13 +300,13 @@ func (c *Consolidator) clusterEpisodesByEdges(episodes []*graph.Episode, edges [
 			continue
 		}
 
-		if existingTraceID != "" {
+		if existingEngramID != "" {
 			// This cluster belongs to an existing trace
 			// Find episodes that aren't already in the trace
 			for _, e := range group.episodes {
-				if episodeToTrace[e.ID] == "" {
+				if episodeToEngram[e.ID] == "" {
 					// New episode for this trace
-					existingTracesWithNewEpisodes[existingTraceID] = append(existingTracesWithNewEpisodes[existingTraceID], e)
+					existingEngramsWithNewEpisodes[existingEngramID] = append(existingEngramsWithNewEpisodes[existingEngramID], e)
 				}
 			}
 		} else {
@@ -315,13 +315,13 @@ func (c *Consolidator) clusterEpisodesByEdges(episodes []*graph.Episode, edges [
 		}
 	}
 
-	return newGroups, existingTracesWithNewEpisodes
+	return newGroups, existingEngramsWithNewEpisodes
 }
 
-// reconsolidateTrace regenerates a trace's summary and metadata after new episodes are added
-func (c *Consolidator) reconsolidateTrace(traceID string) error {
+// reconsolidateEngram regenerates a trace's summary and metadata after new episodes are added
+func (c *Consolidator) reconsolidateEngram(engramID string) error {
 	// Get all source episodes for this trace
-	sourceEpisodes, err := c.graph.GetTraceSourceEpisodes(traceID)
+	sourceEpisodes, err := c.graph.GetEngramSourceEpisodes(engramID)
 	if err != nil {
 		return fmt.Errorf("failed to get source episodes: %w", err)
 	}
@@ -365,22 +365,22 @@ func (c *Consolidator) reconsolidateTrace(traceID string) error {
 	}
 
 	// Reclassify trace type
-	traceType := classifyTraceType(summary, episodePtrs)
+	engramType := classifyEngramType(summary, episodePtrs)
 
 	// Update trace
-	if err := c.graph.UpdateTrace(traceID, summary, embedding, traceType, len(sourceEpisodes)); err != nil {
+	if err := c.graph.UpdateEngram(engramID, summary, embedding, engramType, len(sourceEpisodes)); err != nil {
 		return fmt.Errorf("failed to update trace: %w", err)
 	}
 
 	// Regenerate C8 summary
 	if c.llm != nil {
-		if err := c.graph.GenerateTraceSummaryLevel(traceID, graph.CompressionLevel8, episodePtrs, c.llm); err != nil {
+		if err := c.graph.GenerateEngramSummaryLevel(engramID, graph.CompressionLevel8, episodePtrs, c.llm); err != nil {
 			log.Printf("Failed to regenerate C8 summary for trace: %v", err)
 		}
 	}
 
 	// Clear reconsolidation flag
-	if err := c.graph.ClearReconsolidationFlag(traceID); err != nil {
+	if err := c.graph.ClearReconsolidationFlag(engramID); err != nil {
 		return fmt.Errorf("failed to clear reconsolidation flag: %w", err)
 	}
 
@@ -421,18 +421,14 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 	if isEphemeralContent(summary) || isAllLowInfo(group.episodes) {
 		// Link episodes to sentinel trace so they aren't retried by GetUnconsolidatedEpisodes
 		for _, ep := range group.episodes {
-			c.graph.LinkTraceToSource("_ephemeral", ep.ID)
+			c.graph.LinkEngramToSource("_ephemeral", ep.ID)
 		}
 		// Skipped low-value content
 		return nil
 	}
 
-	// Generate trace ID
-	idSuffix := group.episodes[0].ID
-	if len(idSuffix) > 8 {
-		idSuffix = idSuffix[:8]
-	}
-	traceID := fmt.Sprintf("trace-%d-%s", time.Now().UnixNano(), idSuffix)
+	// Generate engram ID using BLAKE3 hash of summary + timestamp
+	engramID := graph.GenerateEngramID(summary, time.Now().UnixNano())
 
 	// Calculate embedding
 	var embedding []float64
@@ -444,38 +440,38 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 	}
 
 	// Classify trace type
-	traceType := classifyTraceType(summary, group.episodes)
+	engramType := classifyEngramType(summary, group.episodes)
 
-	// Create trace
-	trace := &graph.Trace{
-		ID:         traceID,
+	// Create engram
+	engram := &graph.Engram{
+		ID:         engramID,
 		Summary:    summary,
 		Topic:      "conversation",
-		TraceType:  traceType,
+		EngramType: engramType,
 		Activation: 0.5, // Neutral starting activation (schema default), decay will lower over time
 		Strength:   len(group.episodes), // Strength based on number of source episodes
 		Embedding:  embedding,
 		CreatedAt:  time.Now(),
 	}
 
-	if err := c.graph.AddTrace(trace); err != nil {
+	if err := c.graph.AddEngram(engram); err != nil {
 		return fmt.Errorf("failed to add trace: %w", err)
 	}
 
-	// Link trace to all source episodes
+	// Link engram to all source episodes
 	for _, ep := range group.episodes {
-		if err := c.graph.LinkTraceToSource(traceID, ep.ID); err != nil {
+		if err := c.graph.LinkEngramToSource(engramID, ep.ID); err != nil {
 			log.Printf("Failed to link trace to episode %s: %v", ep.ID, err)
 		}
 	}
 
-	// Link trace to all entities (only if entity exists)
+	// Link engram to all entities (only if entity exists)
 	for entityID := range group.entityIDs {
 		// Check if entity exists before attempting to link
 		if exists, _ := c.graph.EntityExists(entityID); !exists {
 			continue // Skip orphaned entity references
 		}
-		if err := c.graph.LinkTraceToEntity(traceID, entityID); err != nil {
+		if err := c.graph.LinkEngramToEntity(engramID, entityID); err != nil {
 			log.Printf("Failed to link trace to entity %s: %v", entityID, err)
 		}
 	}
@@ -483,14 +479,14 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 	// Generate C8 summary only (for verbose display and basic retrieval)
 	// Full pyramid (L64→L32→L16→L8→L4) should be backfilled by compress-traces later
 	if c.llm != nil {
-		if err := c.graph.GenerateTraceSummaryLevel(traceID, graph.CompressionLevel8, group.episodes, c.llm); err != nil {
-			log.Printf("Failed to generate C8 summary for trace %s: %v", trace.ShortID, err)
+		if err := c.graph.GenerateEngramSummaryLevel(engramID, graph.CompressionLevel8, group.episodes, c.llm); err != nil {
+			log.Printf("Failed to generate C8 summary for trace %s: %v", engramID[:8], err)
 		}
 	}
 
 	// Link to similar traces (>0.85 similarity)
 	if len(embedding) > 0 {
-		c.linkToSimilarTraces(traceID, embedding, 0.85)
+		c.linkToSimilarEngrams(engramID, embedding, 0.85)
 	}
 
 	// Operational traces are logged if verbose mode is enabled
@@ -567,10 +563,10 @@ func isAllLowInfo(episodes []*graph.Episode) bool {
 	return true
 }
 
-// classifyTraceType determines whether a trace is operational (transient system
+// classifyEngramType determines whether a trace is operational (transient system
 // activity) or knowledge (facts, decisions, preferences worth remembering).
 // Operational traces decay 3x faster during activation decay.
-func classifyTraceType(summary string, episodes []*graph.Episode) graph.TraceType {
+func classifyEngramType(summary string, episodes []*graph.Episode) graph.EngramType {
 	lower := strings.ToLower(summary)
 
 	// Meeting reminders and calendar notifications
@@ -584,7 +580,7 @@ func classifyTraceType(summary string, episodes []*graph.Episode) graph.TraceTyp
 		// Sprint planning notifications (even without "meeting" word)
 		strings.Contains(lower, "sprint planning") && (strings.Contains(lower, "starts") || strings.Contains(lower, "soon") || strings.Contains(lower, "in "))
 	if isMeetingReminder && !strings.Contains(lower, "discussed") && !strings.Contains(lower, "decided") {
-		return graph.TraceTypeOperational
+		return graph.EngramTypeOperational
 	}
 
 	// State sync / deployment / restart activity
@@ -593,29 +589,29 @@ func classifyTraceType(summary string, episodes []*graph.Episode) graph.TraceTyp
 		strings.Contains(lower, "launchd service") && strings.Contains(lower, "running") ||
 		strings.Contains(lower, "rebuilt binaries") ||
 		strings.Contains(lower, "deployed") && !strings.Contains(lower, "decision") {
-		return graph.TraceTypeOperational
+		return graph.EngramTypeOperational
 	}
 
 	// Autonomous wake confirmations / idle wakes
 	if strings.Contains(lower, "no actionable work") ||
 		strings.Contains(lower, "idle wake") ||
 		strings.Contains(lower, "wellness check") && !strings.Contains(lower, "finding") {
-		return graph.TraceTypeOperational
+		return graph.EngramTypeOperational
 	}
 
 	// Pure acknowledgments without substantive content
 	if strings.Contains(lower, "confirmed") && !strings.Contains(lower, "decision") &&
 		!strings.Contains(lower, "preference") && len(summary) < 150 {
-		return graph.TraceTypeOperational
+		return graph.EngramTypeOperational
 	}
 
 	// Dev work implementation notes without decision rationale
 	// These are status updates about work done, not learnings or decisions
 	if isDevWorkNote(lower) && !hasKnowledgeIndicator(lower) {
-		return graph.TraceTypeOperational
+		return graph.EngramTypeOperational
 	}
 
-	return graph.TraceTypeKnowledge
+	return graph.EngramTypeKnowledge
 }
 
 // isDevWorkNote checks if the summary appears to be a dev work status update
@@ -676,11 +672,11 @@ func isEphemeralContent(summary string) bool {
 	return false
 }
 
-// linkEpisodesToRelatedTraces creates episode_trace_edges for episodes that are
+// linkEpisodesToRelatedEngrams creates episode_engram_edges for episodes that are
 // semantically similar to existing traces they don't belong to. This captures
 // cross-references between individual episodes and historical traces.
 // Threshold: 0.80 similarity (lower than SIMILAR_TO edge threshold of 0.85)
-func (c *Consolidator) linkEpisodesToRelatedTraces(episodes []*graph.Episode) int {
+func (c *Consolidator) linkEpisodesToRelatedEngrams(episodes []*graph.Episode) int {
 	linked := 0
 	const threshold = 0.80
 
@@ -690,21 +686,21 @@ func (c *Consolidator) linkEpisodesToRelatedTraces(episodes []*graph.Episode) in
 		}
 
 		// Find the primary trace(s) this episode belongs to
-		primaryTraces, err := c.graph.GetEpisodeTraces(ep.ID)
-		if err != nil || len(primaryTraces) == 0 {
+		primaryEngrams, err := c.graph.GetEpisodeEngrams(ep.ID)
+		if err != nil || len(primaryEngrams) == 0 {
 			continue
 		}
 
 		// Build set of traces to exclude (primary trace + _ephemeral)
 		excludeSet := make(map[string]bool)
-		for _, t := range primaryTraces {
+		for _, t := range primaryEngrams {
 			excludeSet[t] = true
 		}
 		excludeSet["_ephemeral"] = true
 
 		// Find other traces with high similarity to this episode's embedding
 		// Use first primary trace as the "exclude" ID (FindSimilarTracesAboveThreshold only takes one)
-		similar, err := c.graph.FindSimilarTracesAboveThreshold(ep.Embedding, threshold, primaryTraces[0])
+		similar, err := c.graph.FindSimilarEngramsAboveThreshold(ep.Embedding, threshold, primaryEngrams[0])
 		if err != nil {
 			continue
 		}
@@ -713,9 +709,9 @@ func (c *Consolidator) linkEpisodesToRelatedTraces(episodes []*graph.Episode) in
 			if excludeSet[s.ID] {
 				continue
 			}
-			// Create episode_trace_edge with similarity as confidence
+			// Create episode_engram_edge with similarity as confidence
 			desc := "semantically related"
-			if err := c.graph.AddEpisodeTraceEdge(ep.ID, s.ID, desc, s.Similarity); err == nil {
+			if err := c.graph.AddEpisodeEngramEdge(ep.ID, s.ID, desc, s.Similarity); err == nil {
 				linked++
 			}
 		}
@@ -724,11 +720,11 @@ func (c *Consolidator) linkEpisodesToRelatedTraces(episodes []*graph.Episode) in
 	return linked
 }
 
-// BackfillEpisodeTraceEdges iterates over all consolidated episodes with embeddings
-// and creates episode_trace_edges for any that are semantically similar to traces
+// BackfillEpisodeEngramEdges iterates over all consolidated episodes with embeddings
+// and creates episode_engram_edges for any that are semantically similar to traces
 // they don't already belong to. Useful for one-time backfill after Phase 5 was deployed.
 // Returns total edges created.
-func (c *Consolidator) BackfillEpisodeTraceEdges(batchSize int) (int, error) {
+func (c *Consolidator) BackfillEpisodeEngramEdges(batchSize int) (int, error) {
 	if batchSize <= 0 {
 		batchSize = 500
 	}
@@ -744,7 +740,7 @@ func (c *Consolidator) BackfillEpisodeTraceEdges(batchSize int) (int, error) {
 			break
 		}
 
-		linked := c.linkEpisodesToRelatedTraces(episodes)
+		linked := c.linkEpisodesToRelatedEngrams(episodes)
 		total += linked
 		log.Printf("[backfill] Processed %d episodes (offset=%d), created %d edges so far", len(episodes), offset, total)
 
@@ -757,10 +753,10 @@ func (c *Consolidator) BackfillEpisodeTraceEdges(batchSize int) (int, error) {
 	return total, nil
 }
 
-// linkToSimilarTraces finds existing traces with high similarity and creates SIMILAR_TO edges.
+// linkToSimilarEngrams finds existing traces with high similarity and creates SIMILAR_TO edges.
 // Returns the number of edges created.
-func (c *Consolidator) linkToSimilarTraces(traceID string, embedding []float64, threshold float64) int {
-	similar, err := c.graph.FindSimilarTracesAboveThreshold(embedding, threshold, traceID)
+func (c *Consolidator) linkToSimilarEngrams(engramID string, embedding []float64, threshold float64) int {
+	similar, err := c.graph.FindSimilarEngramsAboveThreshold(embedding, threshold, engramID)
 	if err != nil {
 		log.Printf("Failed to find similar traces: %v", err)
 		return 0
@@ -768,7 +764,7 @@ func (c *Consolidator) linkToSimilarTraces(traceID string, embedding []float64, 
 
 	linked := 0
 	for _, s := range similar {
-		err := c.graph.AddTraceRelation(traceID, s.ID, graph.EdgeSimilarTo, s.Similarity)
+		err := c.graph.AddEngramRelation(engramID, s.ID, graph.EdgeSimilarTo, s.Similarity)
 		if err == nil {
 			linked++
 		}
@@ -1024,10 +1020,6 @@ func (e *episodeWithSummary) GetID() string {
 	return e.Episode.ID
 }
 
-func (e *episodeWithSummary) GetShortID() string {
-	return e.Episode.ShortID
-}
-
 func (e *episodeWithSummary) GetAuthor() string {
 	return e.Episode.Author
 }
@@ -1092,13 +1084,13 @@ func (c *Consolidator) printEdgeSummaries(episodes []*graph.Episode, edges []Epi
 	targetShortIDs := make(map[string]string)
 	for _, edge := range edges {
 		if ep, ok := episodeMap[edge.ToID]; ok {
-			targetShortIDs[edge.ToID] = ep.ShortID
+			targetShortIDs[edge.ToID] = ep.ID[:5]
 		}
 	}
 
 	// Print each episode and its outgoing edges
 	for _, ep := range episodes {
-		shortID := ep.ShortID
+		shortID := ep.ID[:5]
 
 		// Get C8 summary (8 words) for display
 		summary := ep.Content

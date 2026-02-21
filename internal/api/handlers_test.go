@@ -119,7 +119,7 @@ func TestAuthMissingKey(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	resp := doRequestWithKey(t, srv, http.MethodGet, "/v1/traces", "", "")
+	resp := doRequestWithKey(t, srv, http.MethodGet, "/v1/engrams", "", "")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -131,7 +131,7 @@ func TestAuthWrongKey(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	resp := doRequestWithKey(t, srv, http.MethodGet, "/v1/traces", "", "wrong-key")
+	resp := doRequestWithKey(t, srv, http.MethodGet, "/v1/engrams", "", "wrong-key")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -143,7 +143,7 @@ func TestAuthCorrectKey(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	resp := doRequest(t, srv, http.MethodGet, "/v1/traces", "")
+	resp := doRequest(t, srv, http.MethodGet, "/v1/engrams", "")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -281,11 +281,11 @@ func TestSearch_EmptyDB(t *testing.T) {
 
 // --- Traces ---
 
-func TestListTraces_Empty(t *testing.T) {
+func TestListEngrams_Empty(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	resp := doRequest(t, srv, http.MethodGet, "/v1/traces", "")
+	resp := doRequest(t, srv, http.MethodGet, "/v1/engrams", "")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -293,11 +293,11 @@ func TestListTraces_Empty(t *testing.T) {
 	}
 }
 
-func TestGetTrace_NotFound(t *testing.T) {
+func TestGetEngram_NotFound(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	resp := doRequest(t, srv, http.MethodGet, "/v1/traces/nonexistent-id", "")
+	resp := doRequest(t, srv, http.MethodGet, "/v1/engrams/nonexistent-id", "")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNotFound {
@@ -305,61 +305,63 @@ func TestGetTrace_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetTrace_Found(t *testing.T) {
+func TestGetEngram_Found(t *testing.T) {
 	svc, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	// Insert a trace directly via DB
-	tr := &graph.Trace{
-		ID:        "test-trace-001",
-		Summary:   "Test trace for API",
-		TraceType: graph.TraceTypeKnowledge,
+	const engramID = "a1b2c3d4e5f60000000000000000abcd" // 32-char hex
+	tr := &graph.Engram{
+		ID:         engramID,
+		Summary:    "Test engram for API",
+		EngramType: graph.EngramTypeKnowledge,
 	}
-	if err := svc.Graph.AddTrace(tr); err != nil {
-		t.Fatalf("AddTrace failed: %v", err)
+	if err := svc.Graph.AddEngram(tr); err != nil {
+		t.Fatalf("AddEngram failed: %v", err)
 	}
-	// Add an L1 summary so GetTraceSummary works
-	svc.Graph.AddTraceSummary("test-trace-001", 1, "Test trace for API", 5)
+	svc.Graph.AddEngramSummary(engramID, 1, "Test engram for API", 5)
 
-	resp := doRequest(t, srv, http.MethodGet, "/v1/traces/test-trace-001", "")
+	// Use 5-char prefix for lookup
+	resp := doRequest(t, srv, http.MethodGet, "/v1/engrams/a1b2c", "")
 	var result map[string]any
 	decodeJSON(t, resp, &result)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
-	if result["id"] != "test-trace-001" {
-		t.Errorf("expected id 'test-trace-001', got %v", result["id"])
+	if result["id"] != engramID {
+		t.Errorf("expected id %q, got %v", engramID, result["id"])
 	}
 }
 
-func TestGetTraceContext_Found(t *testing.T) {
+func TestGetEngramContext_Found(t *testing.T) {
 	svc, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	tr := &graph.Trace{
-		ID:      "trace-ctx-001",
-		Summary: "Context trace",
+	const engramID = "deadbeef000102030405060708090011" // 32-char hex
+	tr := &graph.Engram{
+		ID:      engramID,
+		Summary: "Context engram",
 	}
-	svc.Graph.AddTrace(tr)
+	svc.Graph.AddEngram(tr)
 
-	resp := doRequest(t, srv, http.MethodGet, "/v1/traces/trace-ctx-001/context", "")
-	var result traceContextResponse
+	// Use 5-char prefix for lookup
+	resp := doRequest(t, srv, http.MethodGet, "/v1/engrams/deadb/context", "")
+	var result engramContextResponse
 	decodeJSON(t, resp, &result)
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
-	if result.Trace == nil {
-		t.Error("expected non-nil trace in context response")
+	if result.Engram == nil {
+		t.Error("expected non-nil engram in context response")
 	}
 }
 
-func TestGetTraceContext_NotFound(t *testing.T) {
+func TestGetEngramContext_NotFound(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	resp := doRequest(t, srv, http.MethodGet, "/v1/traces/no-such-trace/context", "")
+	resp := doRequest(t, srv, http.MethodGet, "/v1/engrams/no-such-trace/context", "")
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNotFound {
@@ -443,7 +445,7 @@ func TestDecayActivation_NoBody(t *testing.T) {
 	svc, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	svc.Graph.AddTrace(&graph.Trace{ID: "tr-decay-1", Summary: "decay test", Activation: 0.8})
+	svc.Graph.AddEngram(&graph.Engram{ID: "tr-decay-1", Summary: "decay test", Activation: 0.8})
 
 	resp := doRequest(t, srv, http.MethodPost, "/v1/activation/decay", `{}`)
 	var result map[string]int
@@ -456,12 +458,12 @@ func TestDecayActivation_NoBody(t *testing.T) {
 
 // --- Reinforce trace ---
 
-func TestReinforceTrace_NotFound(t *testing.T) {
+func TestReinforceEngram_NotFound(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
 	body := `{"alpha": 0.3}`
-	resp := doRequest(t, srv, http.MethodPost, "/v1/traces/no-such-trace/reinforce", body)
+	resp := doRequest(t, srv, http.MethodPost, "/v1/engrams/no-such-trace/reinforce", body)
 	defer resp.Body.Close()
 
 	// ReinforceTrace on a non-existent trace may return 200 or 500 depending on implementation.
@@ -478,7 +480,7 @@ func TestReset_ClearsData(t *testing.T) {
 	defer cleanup()
 
 	// Insert some data
-	svc.Graph.AddTrace(&graph.Trace{ID: "tr-before-reset", Summary: "will be cleared"})
+	svc.Graph.AddEngram(&graph.Engram{ID: "tr-before-reset", Summary: "will be cleared"})
 
 	resp := doRequest(t, srv, http.MethodDelete, "/v1/memory/reset", "")
 	var result map[string]bool
@@ -492,7 +494,7 @@ func TestReset_ClearsData(t *testing.T) {
 	}
 
 	// Verify the trace is gone
-	trace, _ := svc.Graph.GetTrace("tr-before-reset")
+	trace, _ := svc.Graph.GetEngram("tr-before-reset")
 	if trace != nil {
 		t.Error("expected trace to be gone after reset")
 	}
@@ -575,7 +577,7 @@ func TestFullCycle_IngestAndList(t *testing.T) {
 	}
 
 	// List traces (empty since no consolidation was run)
-	listResp := doRequest(t, srv, http.MethodGet, "/v1/traces", "")
+	listResp := doRequest(t, srv, http.MethodGet, "/v1/engrams", "")
 	var traces []map[string]any
 	decodeJSON(t, listResp, &traces)
 

@@ -32,7 +32,7 @@ type DB struct {
 	db           *sql.DB
 	path         string
 	vecAvailable bool
-	vecDim       int // embedding dimension used in trace_vec (0 = not yet determined)
+	vecDim       int // embedding dimension used in engram_vec (0 = not yet determined)
 
 	// Entity lookup cache: rebuilt lazily, invalidated on entity writes.
 	entityCacheMu sync.RWMutex
@@ -83,7 +83,7 @@ func Open(statePath string) (*DB, error) {
 		// Ensure vec table exists and set vecDim from existing data (handles restarts
 		// where migration v18 already ran but vecDim needs to be restored in memory).
 		if g.vecDim == 0 {
-			if err := g.initVecTableFromTraces(); err != nil {
+			if err := g.initVecTableFromEngrams(); err != nil {
 				log.Printf("[graph] vec init warning: %v", err)
 			}
 		}
@@ -97,21 +97,21 @@ func (g *DB) Close() error {
 	return g.db.Close()
 }
 
-// TestSetTraceTimestamp updates the last_accessed timestamp for a trace (for testing only)
-func (g *DB) TestSetTraceTimestamp(traceID string, lastAccessed time.Time) error {
-	_, err := g.db.Exec(`UPDATE traces SET last_accessed = ? WHERE id = ?`, lastAccessed, traceID)
+// TestSetEngramTimestamp updates the last_accessed timestamp for an engram (for testing only)
+func (g *DB) TestSetEngramTimestamp(engramID string, lastAccessed time.Time) error {
+	_, err := g.db.Exec(`UPDATE engrams SET last_accessed = ? WHERE id = ?`, lastAccessed, engramID)
 	return err
 }
 
-// SetTraceType sets the trace type for a given trace (for testing and classification)
-func (g *DB) SetTraceType(traceID string, traceType TraceType) error {
-	_, err := g.db.Exec(`UPDATE traces SET trace_type = ? WHERE id = ?`, string(traceType), traceID)
+// SetEngramType sets the engram type for a given engram (for testing and classification)
+func (g *DB) SetEngramType(engramID string, engramType EngramType) error {
+	_, err := g.db.Exec(`UPDATE engrams SET engram_type = ? WHERE id = ?`, string(engramType), engramID)
 	return err
 }
 
-// SetTraceActivation sets the activation level for a trace (for testing only)
-func (g *DB) SetTraceActivation(traceID string, activation float64) error {
-	_, err := g.db.Exec(`UPDATE traces SET activation = ? WHERE id = ?`, activation, traceID)
+// SetEngramActivation sets the activation level for an engram (for testing only)
+func (g *DB) SetEngramActivation(engramID string, activation float64) error {
+	_, err := g.db.Exec(`UPDATE engrams SET activation = ? WHERE id = ?`, activation, engramID)
 	return err
 }
 
@@ -370,11 +370,15 @@ func (g *DB) runMigrations() error {
 		g.db.Exec("INSERT INTO schema_version (version) VALUES (5)")
 	}
 
-	// Migration v6: Populate trace_relations with similarity-based edges
+	// Migration v6: Populate trace_relations with similarity-based edges (legacy, pre-engrams).
+	// Only relevant for databases that still have a traces table. Skipped for fresh databases
+	// (traces table is dropped in v21 and replaced by engrams + engram_relations).
 	if version < 6 {
-		if err := g.populateTraceRelations(0.85); err != nil {
-			// Log but don't fail - migration is a best-effort optimization
-			fmt.Printf("[migration v6] warning: failed to populate trace_relations: %v\n", err)
+		// Best-effort: populate trace_relations if traces table exists with embeddings.
+		// Failures are non-fatal; v21 will drop trace_relations anyway.
+		rows, _ := g.db.Query(`SELECT id, embedding FROM traces WHERE embedding IS NOT NULL`)
+		if rows != nil {
+			rows.Close()
 		}
 		g.db.Exec("INSERT INTO schema_version (version) VALUES (6)")
 	}
@@ -714,8 +718,8 @@ func (g *DB) runMigrations() error {
 	if version < 18 {
 		log.Println("[graph] Migrating to schema v18: sqlite-vec trace_vec index")
 		// Detect embedding dimension from existing traces (if any)
-		if err := g.initVecTableFromTraces(); err != nil {
-			log.Printf("[graph] Migration v18 warning: %v — vec index deferred to first AddTrace", err)
+		if err := g.initVecTableFromEngrams(); err != nil {
+			log.Printf("[graph] Migration v18 warning: %v — vec index deferred to first AddEngram", err)
 		}
 		g.db.Exec("INSERT INTO schema_version (version) VALUES (18)")
 		log.Println("[graph] Migration to v18 completed successfully")
@@ -782,18 +786,168 @@ func (g *DB) runMigrations() error {
 		}
 	}
 
+	// Migration v21: Rename traces→engrams, drop short_id columns, adopt BLAKE3 IDs.
+	// Drops all trace_* tables and creates engrams schema. Existing data is discarded
+	// (fresh schema, no migration of old trace data — IDs are incompatible).
+	if version < 21 {
+		log.Println("[graph] Migrating to schema v21: traces→engrams, BLAKE3 IDs")
+
+		dropAndCreate := []string{
+			// Drop old trace tables (order matters for FK constraints)
+			`DROP TABLE IF EXISTS trace_fts`,
+			`DROP TABLE IF EXISTS trace_summaries`,
+			`DROP TABLE IF EXISTS trace_entities`,
+			`DROP TABLE IF EXISTS trace_sources`,
+			`DROP TABLE IF EXISTS trace_relations`,
+			`DROP TABLE IF EXISTS episode_trace_edges`,
+			`DROP TABLE IF EXISTS traces`,
+
+			// Rebuild episodes without short_id; id is now a 32-char BLAKE3 hex.
+			// Existing rows with old-format IDs remain — they just won't match new
+			// BLAKE3 IDs generated by handlers.  New ingestions will always produce
+			// BLAKE3 IDs from the handler.
+			// Drop index first (SQLite requires this before dropping the column)
+			`DROP INDEX IF EXISTS idx_episodes_short_id`,
+			`ALTER TABLE episodes DROP COLUMN short_id`,
+
+			// Engrams table
+			`CREATE TABLE IF NOT EXISTS engrams (
+				id             TEXT PRIMARY KEY,
+				summary        TEXT,
+				topic          TEXT,
+				engram_type    TEXT DEFAULT 'knowledge',
+				activation     REAL DEFAULT 0.5,
+				strength       INTEGER DEFAULT 1,
+				embedding      BLOB,
+				created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+				last_accessed  DATETIME DEFAULT CURRENT_TIMESTAMP,
+				labile_until   DATETIME,
+				needs_reconsolidation BOOLEAN DEFAULT 0
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_engrams_activation ON engrams(activation)`,
+			`CREATE INDEX IF NOT EXISTS idx_engrams_last_accessed ON engrams(last_accessed)`,
+			`CREATE INDEX IF NOT EXISTS idx_engrams_type ON engrams(engram_type)`,
+
+			// Engram summaries (pyramid levels)
+			`CREATE TABLE IF NOT EXISTS engram_summaries (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				engram_id        TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+				compression_level INTEGER NOT NULL,
+				summary          TEXT NOT NULL,
+				tokens           INTEGER NOT NULL,
+				created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(engram_id, compression_level)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_engram_summaries_engram ON engram_summaries(engram_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_engram_summaries_level ON engram_summaries(compression_level)`,
+
+			// Engram-episode junction (replaces trace_sources)
+			`CREATE TABLE IF NOT EXISTS engram_episodes (
+				engram_id  TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+				episode_id TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+				PRIMARY KEY (engram_id, episode_id)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_engram_episodes_episode ON engram_episodes(episode_id)`,
+
+			// Engram-entity junction (replaces trace_entities)
+			`CREATE TABLE IF NOT EXISTS engram_entities (
+				engram_id TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+				entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+				PRIMARY KEY (engram_id, entity_id)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_engram_entities_entity ON engram_entities(entity_id)`,
+
+			// Engram relations (replaces trace_relations)
+			`CREATE TABLE IF NOT EXISTS engram_relations (
+				id           INTEGER PRIMARY KEY AUTOINCREMENT,
+				from_id      TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+				to_id        TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+				relation_type TEXT NOT NULL,
+				weight       REAL DEFAULT 1.0,
+				created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_engram_relations_from ON engram_relations(from_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_engram_relations_to ON engram_relations(to_id)`,
+
+			// Episode-engram edges (replaces episode_trace_edges)
+			`CREATE TABLE IF NOT EXISTS episode_engram_edges (
+				episode_id        TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+				engram_id         TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+				relationship_desc TEXT NOT NULL,
+				confidence        REAL DEFAULT 1.0,
+				created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (episode_id, engram_id)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_episode_engram_episode ON episode_engram_edges(episode_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_episode_engram_engram ON episode_engram_edges(engram_id)`,
+		}
+
+		for _, sql := range dropAndCreate {
+			if _, err := g.db.Exec(sql); err != nil {
+				// Some DROP statements may fail on fresh DBs — non-fatal
+				log.Printf("[graph] Migration v21 (non-fatal): %v", err)
+			}
+		}
+
+		// Create FTS5 for engram_summaries (non-fatal if FTS5 unavailable)
+		ftsMigrations := []string{
+			`CREATE VIRTUAL TABLE IF NOT EXISTS engram_fts USING fts5(
+				engram_id UNINDEXED,
+				summary,
+				content=engram_summaries,
+				content_rowid=id
+			)`,
+			`INSERT OR IGNORE INTO engram_fts(rowid, engram_id, summary)
+				SELECT id, engram_id, summary FROM engram_summaries WHERE compression_level = 32`,
+			`CREATE TRIGGER IF NOT EXISTS engram_summaries_ai
+				AFTER INSERT ON engram_summaries
+				WHEN NEW.compression_level = 32
+				BEGIN
+					INSERT INTO engram_fts(rowid, engram_id, summary) VALUES (NEW.id, NEW.engram_id, NEW.summary);
+				END`,
+			`CREATE TRIGGER IF NOT EXISTS engram_summaries_au
+				AFTER UPDATE ON engram_summaries
+				WHEN NEW.compression_level = 32
+				BEGIN
+					INSERT INTO engram_fts(engram_fts, rowid, engram_id, summary) VALUES ('delete', OLD.id, OLD.engram_id, OLD.summary);
+					INSERT INTO engram_fts(rowid, engram_id, summary) VALUES (NEW.id, NEW.engram_id, NEW.summary);
+				END`,
+			`CREATE TRIGGER IF NOT EXISTS engram_summaries_ad
+				AFTER DELETE ON engram_summaries
+				WHEN OLD.compression_level = 32
+				BEGIN
+					INSERT INTO engram_fts(engram_fts, rowid, engram_id, summary) VALUES ('delete', OLD.id, OLD.engram_id, OLD.summary);
+				END`,
+		}
+		for _, sql := range ftsMigrations {
+			if _, err := g.db.Exec(sql); err != nil {
+				log.Printf("[graph] Migration v21 FTS5 warning: %v", err)
+				break
+			}
+		}
+
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (21)")
+		log.Println("[graph] Migration to v21 completed: engrams schema active")
+
+		// Re-init vec table for engrams (new table name)
+		g.vecDim = 0 // reset so ensureVecTable rebuilds
+		if err := g.initVecTableFromEngrams(); err != nil {
+			log.Printf("[graph] vec init post-v21: %v", err)
+		}
+	}
+
 	return nil
 }
 
-// initVecTableFromTraces reads the embedding dimension from existing traces, creates the
-// trace_vec virtual table with that dimension (if it doesn't already exist), and backfills
-// all existing trace embeddings. No-ops if no traces with embeddings exist yet.
-func (g *DB) initVecTableFromTraces() error {
+// initVecTableFromEngrams reads the embedding dimension from existing engrams, creates the
+// engram_vec virtual table with that dimension (if it doesn't already exist), and backfills
+// all existing engram embeddings. No-ops if no engrams with embeddings exist yet.
+func (g *DB) initVecTableFromEngrams() error {
 	// Read one embedding to determine dimension
 	var embBytes []byte
-	err := g.db.QueryRow(`SELECT embedding FROM traces WHERE embedding IS NOT NULL AND LENGTH(embedding) > 4 LIMIT 1`).Scan(&embBytes)
+	err := g.db.QueryRow(`SELECT embedding FROM engrams WHERE embedding IS NOT NULL AND LENGTH(embedding) > 4 LIMIT 1`).Scan(&embBytes)
 	if err != nil {
-		return nil // no traces with embeddings yet; defer to first AddTrace
+		return nil // no engrams with embeddings yet; defer to first AddEngram
 	}
 	var emb64 []float64
 	if err := json.Unmarshal(embBytes, &emb64); err != nil || len(emb64) == 0 {
@@ -802,36 +956,31 @@ func (g *DB) initVecTableFromTraces() error {
 	return g.ensureVecTable(len(emb64))
 }
 
-// ensureVecTable creates the trace_vec virtual table for the given embedding dimension
-// (if not yet created) and backfills all existing traces. Idempotent for the same dim.
+// ensureVecTable creates the engram_vec virtual table for the given embedding dimension
+// (if not yet created) and backfills all existing engrams. Idempotent for the same dim.
 //
-// Schema uses integer rowid (from the traces table) + auxiliary +trace_id column,
+// Schema uses integer rowid (from the engrams table) + auxiliary +engram_id column,
 // avoiding vec0's TEXT PRIMARY KEY partitioning behaviour which breaks KNN queries.
 func (g *DB) ensureVecTable(dim int) error {
 	if g.vecDim == dim {
 		return nil // already set up for this dimension
 	}
 	if g.vecDim != 0 && g.vecDim != dim {
-		// Dimension mismatch — can't use vec for this embedding
 		return fmt.Errorf("embedding dim %d doesn't match vec table dim %d", dim, g.vecDim)
 	}
 
-	// Create the vec table with the correct dimension.
-	// Use integer rowid (mapped from traces.rowid) and +trace_id as auxiliary text.
 	_, err := g.db.Exec(fmt.Sprintf(`
-		CREATE VIRTUAL TABLE IF NOT EXISTS trace_vec USING vec0(
+		CREATE VIRTUAL TABLE IF NOT EXISTS engram_vec USING vec0(
 			embedding float[%d],
-			+trace_id TEXT
+			+engram_id TEXT
 		)
 	`, dim))
 	if err != nil {
-		return fmt.Errorf("failed to create trace_vec(float[%d]): %w", dim, err)
+		return fmt.Errorf("failed to create engram_vec(float[%d]): %w", dim, err)
 	}
 	g.vecDim = dim
 
-	// Backfill all existing traces into the new index.
-	// Use the traces.rowid as the vec0 rowid for stable integer keying.
-	rows, err := g.db.Query(`SELECT rowid, id, embedding FROM traces WHERE embedding IS NOT NULL`)
+	rows, err := g.db.Query(`SELECT rowid, id, embedding FROM engrams WHERE embedding IS NOT NULL`)
 	if err != nil {
 		return nil // backfill failure is non-fatal
 	}
@@ -854,12 +1003,12 @@ func (g *DB) ensureVecTable(dim int) error {
 		if err := json.Unmarshal(emb, &emb64); err != nil || len(emb64) != dim {
 			continue
 		}
-		emb32 := normalizeFloat32(float64ToFloat32(emb64)) // normalize for cosine-compatible L2
+		emb32 := normalizeFloat32(float64ToFloat32(emb64))
 		serialized, serErr := sqlite_vec.SerializeFloat32(emb32)
 		if serErr != nil {
 			continue
 		}
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO trace_vec(rowid, embedding, trace_id) VALUES (?, ?, ?)`, rowid, serialized, id); err != nil {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO engram_vec(rowid, embedding, engram_id) VALUES (?, ?, ?)`, rowid, serialized, id); err != nil {
 			log.Printf("[graph] vec backfill failed for %s: %v", id, err)
 			continue
 		}
@@ -869,7 +1018,7 @@ func (g *DB) ensureVecTable(dim int) error {
 		return nil
 	}
 	if count > 0 {
-		log.Printf("[graph] vec backfill: indexed %d traces (dim=%d)", count, dim)
+		log.Printf("[graph] vec backfill: indexed %d engrams (dim=%d)", count, dim)
 	}
 	return nil
 }
@@ -919,14 +1068,15 @@ func l2ToCosineSim(l2dist float64) float64 {
 func (g *DB) Stats() (map[string]int, error) {
 	stats := make(map[string]int)
 
-	tables := []string{"episodes", "episode_summaries", "entities", "traces", "trace_sources", "episode_edges", "entity_relations", "trace_relations"}
+	tables := []string{"episodes", "episode_summaries", "entities", "engrams", "engram_episodes", "episode_edges", "entity_relations", "engram_relations"}
 	for _, table := range tables {
 		var count int
 		err := g.db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&count)
 		if err != nil {
-			return nil, err
+			stats[table] = 0 // table may not exist yet on fresh DB before migration
+		} else {
+			stats[table] = count
 		}
-		stats[table] = count
 	}
 
 	return stats, nil
@@ -935,7 +1085,7 @@ func (g *DB) Stats() (map[string]int, error) {
 // Clear removes all data (for testing/reset)
 func (g *DB) Clear() error {
 	tables := []string{
-		"trace_relations", "trace_entities", "trace_sources", "traces",
+		"engram_relations", "engram_entities", "engram_episodes", "engrams",
 		"entity_relations", "episode_mentions", "entity_aliases", "entities",
 		"episode_edges", "episode_summaries", "episodes",
 	}
@@ -949,21 +1099,20 @@ func (g *DB) Clear() error {
 	return nil
 }
 
-// populateTraceRelations computes pairwise similarity for all traces and creates
-// SIMILAR_TO edges for pairs above the given threshold. Called during migration v6.
-func (g *DB) populateTraceRelations(threshold float64) error {
-	// Load all traces with embeddings
-	rows, err := g.db.Query(`SELECT id, embedding FROM traces WHERE embedding IS NOT NULL`)
+// populateEngramRelations computes pairwise similarity for all engrams and creates
+// SIMILAR_TO edges for pairs above the given threshold.
+func (g *DB) populateEngramRelations(threshold float64) error {
+	rows, err := g.db.Query(`SELECT id, embedding FROM engrams WHERE embedding IS NOT NULL`)
 	if err != nil {
-		return fmt.Errorf("failed to query traces: %w", err)
+		return fmt.Errorf("failed to query engrams: %w", err)
 	}
 	defer rows.Close()
 
-	type traceEmb struct {
+	type engramEmb struct {
 		id        string
 		embedding []float64
 	}
-	var traces []traceEmb
+	var engrams []engramEmb
 
 	for rows.Next() {
 		var id string
@@ -975,21 +1124,19 @@ func (g *DB) populateTraceRelations(threshold float64) error {
 		if err := json.Unmarshal(embBytes, &embedding); err != nil {
 			continue
 		}
-		traces = append(traces, traceEmb{id: id, embedding: embedding})
+		engrams = append(engrams, engramEmb{id: id, embedding: embedding})
 	}
 
-	if len(traces) < 2 {
-		return nil // Nothing to link
+	if len(engrams) < 2 {
+		return nil
 	}
 
-	// Compute pairwise similarities and insert edges above threshold
 	var edgesAdded int
-	for i := 0; i < len(traces); i++ {
-		for j := i + 1; j < len(traces); j++ {
-			sim := cosineSim(traces[i].embedding, traces[j].embedding)
+	for i := 0; i < len(engrams); i++ {
+		for j := i + 1; j < len(engrams); j++ {
+			sim := cosineSim(engrams[i].embedding, engrams[j].embedding)
 			if sim >= threshold {
-				// Add bidirectional edge (stored once, queried both ways)
-				err := g.AddTraceRelation(traces[i].id, traces[j].id, EdgeSimilarTo, sim)
+				err := g.AddEngramRelation(engrams[i].id, engrams[j].id, EdgeSimilarTo, sim)
 				if err == nil {
 					edgesAdded++
 				}
@@ -997,8 +1144,8 @@ func (g *DB) populateTraceRelations(threshold float64) error {
 		}
 	}
 
-	fmt.Printf("[migration v6] Populated trace_relations: %d SIMILAR_TO edges (threshold %.2f, %d traces)\n",
-		edgesAdded, threshold, len(traces))
+	fmt.Printf("[migration] Populated engram_relations: %d SIMILAR_TO edges (threshold %.2f, %d engrams)\n",
+		edgesAdded, threshold, len(engrams))
 	return nil
 }
 

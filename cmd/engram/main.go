@@ -186,7 +186,7 @@ func runConsolidation(ctx context.Context, c *consolidate.Consolidator, interval
 			if err != nil {
 				logger.Error("background consolidation failed", "err", err)
 			} else if created > 0 {
-				logger.Info("background consolidation complete", "traces_created", created, "duration_ms", time.Since(start).Milliseconds())
+				logger.Info("background consolidation complete", "engrams_created", created, "duration_ms", time.Since(start).Milliseconds())
 			}
 		}
 	}
