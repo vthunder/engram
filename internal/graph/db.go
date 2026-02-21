@@ -960,6 +960,16 @@ func (g *DB) runMigrations() error {
 		log.Println("[graph] Migration to v22 completed: entity_summaries table added")
 	}
 
+	// Migration v23: Add inferred_by_llm to episode_edges to distinguish structural edges
+	// (REPLIES_TO created at ingestion, inferred_by_llm=0) from LLM-inferred semantic edges
+	// (inferred_by_llm=1). Consolidation only skips LLM inference when semantic edges already
+	// exist, preventing structural reply edges from permanently blocking inference.
+	if version < 23 {
+		g.db.Exec(`ALTER TABLE episode_edges ADD COLUMN inferred_by_llm INTEGER DEFAULT 0`)
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (23)")
+		log.Println("[graph] Migration to v23 completed: episode_edges.inferred_by_llm")
+	}
+
 	return nil
 }
 

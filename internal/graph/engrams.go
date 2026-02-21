@@ -861,6 +861,17 @@ func (g *DB) ClearReconsolidationFlag(engramID string) error {
 	return err
 }
 
+// UpdateEngramLabileUntil sets the labile_until timestamp for an engram.
+// While labile, new related episodes extend the engram via reconsolidation.
+// After the window expires, new related episodes form a separate engram.
+func (g *DB) UpdateEngramLabileUntil(engramID string, labileUntil time.Time) error {
+	_, err := g.db.Exec(
+		`UPDATE engrams SET labile_until = ? WHERE id = ?`,
+		nullableTime(labileUntil), engramID,
+	)
+	return err
+}
+
 // UpdateEngram updates an engram's summary, embedding, type, and strength after reconsolidation
 func (g *DB) UpdateEngram(engramID, summary string, embedding []float64, engramType EngramType, strength int) error {
 	embeddingJSON, err := json.Marshal(embedding)

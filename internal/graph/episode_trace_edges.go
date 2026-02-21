@@ -32,7 +32,8 @@ func (g *DB) QueryEpisodeEdges(episodeIDs map[string]bool) ([]EpisodeEdgeRow, er
 		SELECT from_id, to_id, relationship_desc, confidence
 		FROM episode_edges
 		WHERE from_id IN (` + buildPlaceholders(len(ids)) + `)
-		  AND to_id IN (` + buildPlaceholders(len(ids)) + `)`
+		  AND to_id IN (` + buildPlaceholders(len(ids)) + `)
+		  AND inferred_by_llm = 1`
 
 	args := make([]interface{}, len(ids)*2)
 	for i, id := range ids {
@@ -69,14 +70,71 @@ func buildPlaceholders(n int) string {
 	return strings.Join(placeholders, ",")
 }
 
-// AddEpisodeEpisodeEdge creates semantic link between episodes
+// AddEpisodeEpisodeEdge creates a LLM-inferred semantic link between episodes.
+// Sets inferred_by_llm=1 to distinguish from structural edges (REPLIES_TO) created at ingestion.
 func (g *DB) AddEpisodeEpisodeEdge(fromID, toID, edgeType, relationshipDesc string, confidence float64) error {
 	_, err := g.db.Exec(`
-		INSERT INTO episode_edges (from_id, to_id, edge_type, relationship_desc, confidence, created_at)
-		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO episode_edges (from_id, to_id, edge_type, relationship_desc, confidence, inferred_by_llm, created_at)
+		VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
 		ON CONFLICT DO NOTHING
 	`, fromID, toID, edgeType, relationshipDesc, confidence)
 	return err
+}
+
+// QueryCrossBatchEpisodeEngrams finds engrams reachable from batch episodes via edges to
+// consolidated (non-batch) episodes. Returns a map of batchEpisodeID → engramID.
+// Because batch episodes are unconsolidated (not in engram_episodes), the JOIN to
+// engram_episodes naturally excludes within-batch edges — no extra filter needed.
+// Includes both structural (REPLIES_TO) and LLM-inferred edges so reply chains work.
+func (g *DB) QueryCrossBatchEpisodeEngrams(batchIDs map[string]bool) (map[string]string, error) {
+	if len(batchIDs) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]string, 0, len(batchIDs))
+	for id := range batchIDs {
+		ids = append(ids, id)
+	}
+	ph := buildPlaceholders(len(ids))
+
+	// Two directions: batch episode as from_id, and as to_id.
+	// The JOIN with engram_episodes filters to consolidated counterparts only.
+	query := `
+		SELECT ee.from_id, eg.engram_id
+		FROM episode_edges ee
+		JOIN engram_episodes eg ON eg.episode_id = ee.to_id
+		WHERE ee.from_id IN (` + ph + `)
+		  AND eg.engram_id != '_ephemeral'
+		UNION
+		SELECT ee.to_id, eg.engram_id
+		FROM episode_edges ee
+		JOIN engram_episodes eg ON eg.episode_id = ee.from_id
+		WHERE ee.to_id IN (` + ph + `)
+		  AND eg.engram_id != '_ephemeral'`
+
+	args := make([]interface{}, len(ids)*2)
+	for i, id := range ids {
+		args[i] = id
+		args[len(ids)+i] = id
+	}
+
+	rows, err := g.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var batchEpID, engramID string
+		if err := rows.Scan(&batchEpID, &engramID); err != nil {
+			continue
+		}
+		if _, exists := result[batchEpID]; !exists {
+			result[batchEpID] = engramID
+		}
+	}
+	return result, rows.Err()
 }
 
 // AddEpisodeEngramEdge creates link from episode to engram

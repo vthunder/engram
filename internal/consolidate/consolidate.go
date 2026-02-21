@@ -27,9 +27,8 @@ type Consolidator struct {
 	llm    LLMClient
 
 	// Configuration
-	TimeWindow   time.Duration // Max time span for grouping (default 30 min)
-	MinGroupSize int           // Minimum episodes to form a group (default 1)
-	MaxGroupSize int           // Maximum episodes per group (default 10)
+	MinGroupSize int // Minimum episodes to form a group (default 1)
+	MaxGroupSize int // Maximum episodes per group (default 10)
 
 	// Identity fields for role-aware consolidation prompts.
 	// If BotName is empty, falls back to neutral name-only framing.
@@ -54,7 +53,6 @@ func NewConsolidator(g *graph.DB, llm LLMClient, claude *ClaudeInference) *Conso
 		graph:               g,
 		llm:                 llm,
 		claude:              claude,
-		TimeWindow:          30 * time.Minute,
 		MinGroupSize:        1,
 		MaxGroupSize:        10,
 		episodeBatchSize:    20,
@@ -65,8 +63,9 @@ func NewConsolidator(g *graph.DB, llm LLMClient, claude *ClaudeInference) *Conso
 
 // episodeGroup represents a group of related episodes to consolidate
 type episodeGroup struct {
-	episodes  []*graph.Episode
-	entityIDs map[string]bool // union of all entity IDs
+	episodes     []*graph.Episode
+	entityIDs    map[string]bool // union of all entity IDs
+	priorContext string          // optional preceding context shown to LLM (prior sub-group or prior engram summary)
 }
 
 // Run consolidates unconsolidated episodes into traces.
@@ -78,6 +77,7 @@ type episodeGroup struct {
 // Phase 3: Create traces from clustered groups
 func (c *Consolidator) Run() (int, error) {
 	totalCreated := 0
+	var prevEpisodeIDs map[string]bool
 
 	// Process episodes in batches until all are consolidated
 	for {
@@ -91,11 +91,17 @@ func (c *Consolidator) Run() (int, error) {
 			return totalCreated, nil
 		}
 
-		// Track which episodes are unconsolidated for incremental mode
-		unconsolidatedIDs := make(map[string]bool)
+		// No-progress guard: if the same set of episode IDs is returned as the previous
+		// iteration, clustering made no progress and we must stop to avoid an infinite loop.
+		currentEpisodeIDs := make(map[string]bool, len(episodes))
 		for _, ep := range episodes {
-			unconsolidatedIDs[ep.ID] = true
+			currentEpisodeIDs[ep.ID] = true
 		}
+		if prevEpisodeIDs != nil && mapsEqual(currentEpisodeIDs, prevEpisodeIDs) {
+			log.Printf("[consolidate] No progress: same %d episodes returned, stopping", len(episodes))
+			return totalCreated, nil
+		}
+		prevEpisodeIDs = currentEpisodeIDs
 
 		ctx := context.Background()
 
@@ -152,21 +158,53 @@ func (c *Consolidator) Run() (int, error) {
 		}
 
 		// Phase 2: Graph clustering using Claude-inferred edges
-		// Returns: new groups (to be consolidated) and existing traces with new episodes
+		// Returns: new groups (to be consolidated) and existing engrams with new episodes
 		newGroups, existingEngramsWithNewEpisodes := c.clusterEpisodesByEdges(episodes, episodeEdges)
 
-		// Phase 3a: Add new episodes to existing traces and mark for reconsolidation
+		// Phase 3a: Add new episodes to labile engrams; route non-labile to new groups.
+		// Non-labile groups carry the prior engram's summary as context so the new engram
+		// can reference what came before.
 		for engramID, newEpisodes := range existingEngramsWithNewEpisodes {
+			engram, err := c.graph.GetEngram(engramID)
+			if err != nil || engram == nil || !engram.IsLabile() {
+				// Engram past its labile window — new episodes form their own group.
+				newGroup := &episodeGroup{
+					episodes:  newEpisodes,
+					entityIDs: make(map[string]bool),
+				}
+				if engram != nil && engram.Summary != "" {
+					newGroup.priorContext = "Previous memory: " + engram.Summary
+				}
+				for _, ep := range newEpisodes {
+					if entities, err := c.graph.GetEpisodeEntities(ep.ID); err == nil {
+						for _, eid := range entities {
+							newGroup.entityIDs[eid] = true
+						}
+					}
+				}
+				newGroups = append(newGroups, newGroup)
+				continue
+			}
+			// Labile: extend the existing engram.
 			for _, ep := range newEpisodes {
 				if err := c.graph.LinkEngramToSource(engramID, ep.ID); err != nil {
-					log.Printf("[consolidate] Failed to link episode %s to existing trace %s: %v", ep.ID[:5], engramID, err)
+					log.Printf("[consolidate] Failed to link episode %s to existing engram %s: %v", ep.ID[:5], engramID, err)
 					continue
 				}
 			}
-			// Mark trace for reconsolidation
 			if err := c.graph.MarkEngramForReconsolidation(engramID); err != nil {
-				log.Printf("[consolidate] Failed to mark trace %s for reconsolidation: %v", engramID, err)
+				log.Printf("[consolidate] Failed to mark engram %s for reconsolidation: %v", engramID, err)
 			}
+		}
+
+		// Apply MaxGroupSize: split large components into ≤MaxGroupSize sub-groups.
+		// Done after Phase 3a so rerouted non-labile groups are also subject to splitting.
+		if c.MaxGroupSize > 0 {
+			split := make([]*episodeGroup, 0, len(newGroups))
+			for _, g := range newGroups {
+				split = append(split, c.splitEpisodeGroup(g, c.MaxGroupSize)...)
+			}
+			newGroups = split
 		}
 
 		// Phase 3b: Create engrams from new clustered groups
@@ -223,14 +261,32 @@ func (c *Consolidator) clusterEpisodesByEdges(episodes []*graph.Episode, edges [
 		episodeMap[ep.ID] = ep
 	}
 
-	// Check which episodes are already part of existing traces
-	episodeToEngram := make(map[string]string) // episode ID -> trace ID
+	// Check which episodes are already part of existing engrams.
+	// All batch episodes are unconsolidated so GetEpisodeEngrams returns empty for them.
+	// We keep this loop as a safety net in case of inconsistent state.
+	episodeToEngram := make(map[string]string) // episode ID -> engram ID
 	for _, ep := range episodes {
 		engrams, err := c.graph.GetEpisodeEngrams(ep.ID)
 		if err == nil && len(engrams) > 0 {
-			// Episode already belongs to a trace (should only be one, but take the first)
 			episodeToEngram[ep.ID] = engrams[0]
 		}
+	}
+
+	// Cross-batch lookup: find engrams reachable via edges to consolidated episodes.
+	// This makes reconsolidation work: if a batch episode replies to (or was previously
+	// linked to) a consolidated episode, it extends that consolidated engram.
+	batchIDs := make(map[string]bool, len(episodeMap))
+	for id := range episodeMap {
+		batchIDs[id] = true
+	}
+	if crossBatch, err := c.graph.QueryCrossBatchEpisodeEngrams(batchIDs); err == nil {
+		for epID, engramID := range crossBatch {
+			if _, exists := episodeToEngram[epID]; !exists {
+				episodeToEngram[epID] = engramID
+			}
+		}
+	} else {
+		log.Printf("[consolidate] cross-batch engram lookup failed: %v", err)
 	}
 
 	// Build adjacency list from high-confidence edges (confidence >= 0.7)
@@ -323,9 +379,20 @@ func (c *Consolidator) clusterEpisodesByEdges(episodes []*graph.Episode, edges [
 	return newGroups, existingEngramsWithNewEpisodes
 }
 
-// reconsolidateEngram regenerates a trace's summary and metadata after new episodes are added
+// reconsolidateEngram regenerates an engram's summary after new episodes are linked to it.
+// Skips if the engram's labile window has expired — frozen engrams don't get updated.
 func (c *Consolidator) reconsolidateEngram(engramID string) error {
-	// Get all source episodes for this trace
+	// Check labile window: only reconsolidate while the engram is modifiable.
+	engram, err := c.graph.GetEngram(engramID)
+	if err != nil || engram == nil {
+		return fmt.Errorf("failed to get engram for labile check: %w", err)
+	}
+	if !engram.IsLabile() {
+		log.Printf("[consolidate] Engram %s labile window expired, skipping reconsolidation", engramID[:min(8, len(engramID))])
+		return c.graph.ClearReconsolidationFlag(engramID)
+	}
+
+	// Get all source episodes for this engram
 	sourceEpisodes, err := c.graph.GetEngramSourceEpisodes(engramID)
 	if err != nil {
 		return fmt.Errorf("failed to get source episodes: %w", err)
@@ -353,7 +420,7 @@ func (c *Consolidator) reconsolidateEngram(engramID string) error {
 		// Fetch entity context from prior engrams (exclude self during reconsolidation)
 		entityIDs, _ := c.graph.GetEngramEntities(engramID)
 		entityCtx := c.buildEntityContext(entityIDs, engramID)
-		prompt := c.buildConsolidationPrompt(episodePtrs, entityCtx)
+		prompt := c.buildConsolidationPrompt(episodePtrs, entityCtx, "")
 		summary, err = c.llm.Generate(prompt)
 		if err != nil {
 			summary = truncate(strings.Join(fragments, " "), 300)
@@ -420,7 +487,7 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 			entityIDSlice = append(entityIDSlice, id)
 		}
 		entityCtx := c.buildEntityContext(entityIDSlice, "")
-		prompt := c.buildConsolidationPrompt(group.episodes, entityCtx)
+		prompt := c.buildConsolidationPrompt(group.episodes, entityCtx, group.priorContext)
 		summary, err = c.llm.Generate(prompt)
 		if err != nil {
 			// Summarization failed, fall back to truncation
@@ -472,6 +539,13 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 
 	if err := c.graph.AddEngram(engram); err != nil {
 		return fmt.Errorf("failed to add trace: %w", err)
+	}
+
+	// Mark engram as labile for 24 hours: new related episodes extend it via reconsolidation.
+	// After the window expires, new related episodes form a separate engram instead.
+	engram.MakeLabile(24 * time.Hour)
+	if err := c.graph.UpdateEngramLabileUntil(engramID, engram.LabileUntil); err != nil {
+		log.Printf("[consolidate] Failed to set labile window for %s: %v", engramID[:8], err)
 	}
 
 	// Link engram to all source episodes
@@ -646,7 +720,9 @@ func (c *Consolidator) buildEntityContext(entityIDs []string, excludeEngramID st
 // buildConsolidationPrompt constructs an identity-aware, temporally-framed prompt for
 // generating a memory summary from a group of episodes. entityContext is an optional
 // pre-formatted block of prior memory lines (from buildEntityContext); empty = omitted.
-func (c *Consolidator) buildConsolidationPrompt(episodes []*graph.Episode, entityContext string) string {
+// priorContext is optional preceding content (prior sub-group episodes or a prior engram
+// summary) shown for reference — the LLM should not re-summarize it.
+func (c *Consolidator) buildConsolidationPrompt(episodes []*graph.Episode, entityContext, priorContext string) string {
 	// Find latest timestamp across episodes for temporal anchor
 	var latest time.Time
 	for _, ep := range episodes {
@@ -686,6 +762,14 @@ func (c *Consolidator) buildConsolidationPrompt(episodes []*graph.Episode, entit
 	sb.WriteString("  NEVER generalize a one-time approval into a standing permission.\n")
 	sb.WriteString("- Include ONLY information explicitly stated — do not infer or embellish.\n")
 	sb.WriteString("- Output ONLY the memory text, no preamble.\n\n")
+
+	// Inject preceding context (prior sub-group episodes or prior engram summary).
+	// Shown for continuity — the LLM should not re-summarize it.
+	if priorContext != "" {
+		sb.WriteString("Preceding context (for reference only — do not re-summarize):\n")
+		sb.WriteString(priorContext)
+		sb.WriteString("\n\n")
+	}
 
 	// Inject prior entity context — only when available (second+ consolidation run)
 	if entityContext != "" {
@@ -1092,6 +1176,9 @@ func (c *Consolidator) inferEpisodeEpisodeLinks(ctx context.Context, episodes []
 	if len(episodes) == 0 {
 		return nil, nil
 	}
+	if c.claude == nil {
+		return nil, nil
+	}
 
 	// Sort episodes by timestamp to ensure temporal ordering
 	sorted := make([]*graph.Episode, len(episodes))
@@ -1118,19 +1205,28 @@ func (c *Consolidator) inferEpisodeEpisodeLinks(ctx context.Context, episodes []
 		summaryC16 string
 	}
 
-	// Filter episodes with C16 summaries available
+	// Build enriched list: use stored C16 summary when available, otherwise fall back
+	// to the first 32 words of episode content. This ensures inference always runs even
+	// for fresh episodes that have not yet had summaries generated by compress-traces.
 	var withSummaries []*enrichedEpisode
 	for _, ep := range sorted {
-		if summary, ok := summaries[ep.ID]; ok && summary != nil {
-			withSummaries = append(withSummaries, &enrichedEpisode{
-				Episode:    ep,
-				summaryC16: summary.Summary,
-			})
+		summaryC16 := ""
+		if s, ok := summaries[ep.ID]; ok && s != nil {
+			summaryC16 = s.Summary
+		} else {
+			words := strings.Fields(ep.Content)
+			if len(words) > 32 {
+				words = words[:32]
+			}
+			summaryC16 = strings.Join(words, " ")
 		}
+		withSummaries = append(withSummaries, &enrichedEpisode{
+			Episode:    ep,
+			summaryC16: summaryC16,
+		})
 	}
 
 	if len(withSummaries) == 0 {
-		// No episodes with C16 summaries available, skipping edge inference
 		return nil, nil
 	}
 
@@ -1204,6 +1300,74 @@ func (e *episodeWithSummary) GetTimestamp() time.Time {
 
 func (e *episodeWithSummary) GetSummaryC16() string {
 	return e.summaryC16
+}
+
+// mapsEqual returns true if both maps have exactly the same set of keys.
+func mapsEqual(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
+}
+
+// splitEpisodeGroup divides a group larger than maxSize into sub-groups in timestamp order.
+// Each sub-group (except the first) receives the previous sub-group's formatted episodes as
+// priorContext so the LLM has continuity across splits. The first sub-group inherits the
+// parent group's priorContext (e.g., a prior engram summary from the non-labile path).
+// All entity IDs from the original group are propagated to every sub-group.
+func (c *Consolidator) splitEpisodeGroup(group *episodeGroup, maxSize int) []*episodeGroup {
+	if len(group.episodes) <= maxSize {
+		return []*episodeGroup{group}
+	}
+
+	// Sort by event timestamp to preserve temporal locality within each sub-group.
+	sorted := make([]*graph.Episode, len(group.episodes))
+	copy(sorted, group.episodes)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].TimestampEvent.Before(sorted[j].TimestampEvent)
+	})
+
+	var result []*episodeGroup
+	for start := 0; start < len(sorted); start += maxSize {
+		end := start + maxSize
+		if end > len(sorted) {
+			end = len(sorted)
+		}
+
+		sub := &episodeGroup{
+			episodes:  sorted[start:end],
+			entityIDs: make(map[string]bool, len(group.entityIDs)),
+		}
+		for id := range group.entityIDs {
+			sub.entityIDs[id] = true
+		}
+
+		if len(result) == 0 {
+			// First sub-group inherits the parent's prior context.
+			sub.priorContext = group.priorContext
+		} else {
+			// Subsequent sub-groups receive the previous sub-group's episodes as context.
+			prev := result[len(result)-1]
+			var parts []string
+			for _, ep := range prev.episodes {
+				label := c.labelFragment(ep)
+				if label != "" {
+					parts = append(parts, label+": "+ep.Content)
+				} else {
+					parts = append(parts, ep.Content)
+				}
+			}
+			sub.priorContext = strings.Join(parts, "\n")
+		}
+
+		result = append(result, sub)
+	}
+	return result
 }
 
 // deduplicateEdges removes duplicate edges (same from/to/relationship)
