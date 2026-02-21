@@ -11,6 +11,25 @@ info:
 
     All `/v1/*` endpoints require Bearer token authentication.
     The `/health` endpoint is public.
+
+    ## Identity Configuration
+
+    Set `identity` in `engram.yaml` to enable role-aware memory consolidation.
+    When configured, the consolidation pipeline labels episode fragments by role
+    (bot, owner, or third party) so memories are generated with correct attribution.
+
+    ```yaml
+    identity:
+      name: "Bud"          # Bot display name; matches episode.author
+      author_id: "bud"     # Matches episode.author_id set by callers
+      owner_ids:            # Optional; enables owner-specific framing
+        - "thunder"
+    ```
+
+    `POST /v1/thoughts` automatically stamps `author`/`author_id` from the
+    identity config so the bot's internal monologue is correctly attributed.
+
+    Env var overrides: `ENGRAM_IDENTITY_NAME`, `ENGRAM_IDENTITY_AUTHOR_ID`.
   version: "0.1.0"
   license:
     name: MIT

@@ -20,6 +20,8 @@ type Services struct {
 	NERClient    *ner.Client
 	Consolidator *consolidate.Consolidator
 	Logger       *slog.Logger
+	BotName      string // from identity config; empty = no identity configured
+	BotAuthorID  string // from identity config
 }
 
 // --- Response helpers ---
@@ -213,6 +215,8 @@ func (s *Services) handleIngestThought(w http.ResponseWriter, r *http.Request) {
 		ID:             id,
 		Content:        req.Content,
 		Source:         "thought",
+		Author:         s.BotName,
+		AuthorID:       s.BotAuthorID,
 		TimestampEvent: now,
 	}
 	if err := s.Graph.AddEpisode(ep); err != nil {

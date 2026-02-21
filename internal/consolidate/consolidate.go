@@ -15,11 +15,10 @@ import (
 	"github.com/vthunder/engram/internal/graph"
 )
 
-// LLMClient provides embedding and summarization capabilities
+// LLMClient provides embedding and text generation capabilities
 type LLMClient interface {
 	Embed(text string) ([]float64, error)
-	Summarize(fragments []string) (string, error)
-	Generate(prompt string) (string, error) // For pyramid summary generation
+	Generate(prompt string) (string, error)
 }
 
 // Consolidator handles memory consolidation
@@ -31,6 +30,12 @@ type Consolidator struct {
 	TimeWindow   time.Duration // Max time span for grouping (default 30 min)
 	MinGroupSize int           // Minimum episodes to form a group (default 1)
 	MaxGroupSize int           // Maximum episodes per group (default 10)
+
+	// Identity fields for role-aware consolidation prompts.
+	// If BotName is empty, falls back to neutral name-only framing.
+	BotName     string
+	BotAuthorID string
+	OwnerIDs    []string
 
 	// Claude inference for relationship linking
 	claude *ClaudeInference
@@ -345,7 +350,8 @@ func (c *Consolidator) reconsolidateEngram(engramID string) error {
 	// Generate new summary
 	var summary string
 	if c.llm != nil {
-		summary, err = c.llm.Summarize(fragments)
+		prompt := c.buildConsolidationPrompt(episodePtrs)
+		summary, err = c.llm.Generate(prompt)
 		if err != nil {
 			summary = truncate(strings.Join(fragments, " "), 300)
 		}
@@ -405,7 +411,8 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 	var err error
 
 	if c.llm != nil {
-		summary, err = c.llm.Summarize(fragments)
+		prompt := c.buildConsolidationPrompt(group.episodes)
+		summary, err = c.llm.Generate(prompt)
 		if err != nil {
 			// Summarization failed, fall back to truncation
 			summary = truncate(strings.Join(fragments, " "), 300)
@@ -542,6 +549,92 @@ func calculateCentroid(episodes []*graph.Episode) []float64 {
 	}
 
 	return centroid
+}
+
+// labelFragment returns the role label for an episode, e.g. "[BotName]", "[Alice (owner)]", "[Alice]".
+func (c *Consolidator) labelFragment(ep *graph.Episode) string {
+	// Check if this is the bot
+	if c.BotName != "" {
+		if (ep.Author != "" && ep.Author == c.BotName) ||
+			(ep.AuthorID != "" && c.BotAuthorID != "" && ep.AuthorID == c.BotAuthorID) {
+			return "[" + c.BotName + "]"
+		}
+	}
+	// Check if this is an owner (matched by AuthorID)
+	if len(c.OwnerIDs) > 0 && ep.AuthorID != "" {
+		for _, ownerID := range c.OwnerIDs {
+			if ep.AuthorID == ownerID {
+				name := ep.Author
+				if name == "" {
+					name = "owner"
+				}
+				return "[" + name + " (owner)]"
+			}
+		}
+	}
+	// Third party or unknown
+	if ep.Author != "" {
+		return "[" + ep.Author + "]"
+	}
+	return ""
+}
+
+// buildConsolidationPrompt constructs an identity-aware, temporally-framed prompt for
+// generating a memory summary from a group of episodes.
+func (c *Consolidator) buildConsolidationPrompt(episodes []*graph.Episode) string {
+	// Find latest timestamp across episodes for temporal anchor
+	var latest time.Time
+	for _, ep := range episodes {
+		if ep.TimestampEvent.After(latest) {
+			latest = ep.TimestampEvent
+		}
+	}
+	if latest.IsZero() {
+		latest = time.Now()
+	}
+
+	var sb strings.Builder
+
+	// Role context header — only when bot identity is configured
+	if c.BotName != "" {
+		sb.WriteString("You are recording a memory for an AI assistant named " + c.BotName + ".\n\n")
+		sb.WriteString("Role context:\n")
+		sb.WriteString("- Fragments labeled \"[" + c.BotName + "]\" are from the assistant. Write about the\n")
+		sb.WriteString("  assistant's statements in first person: \"I\", \"me\", \"my\".\n")
+		sb.WriteString("- Fragments labeled with \"(owner)\" are from the owner. Refer to them as\n")
+		sb.WriteString("  \"the owner\" or by their name.\n")
+		sb.WriteString("- All other names are third parties. Refer to them by name.\n\n")
+	}
+
+	sb.WriteString("Summarize the following fragments into a single memory (1-2 sentences).\n\n")
+	sb.WriteString("Rules:\n")
+	sb.WriteString("- Attribute statements to their SUBJECT, not just their speaker.\n")
+	sb.WriteString("  Example: [owner]: \"Alice prefers mornings\" → Alice prefers morning meetings\n")
+	sb.WriteString("- Pronouns resolve to the author of that fragment:\n")
+	sb.WriteString("  [alice]: \"I prefer mornings\" → Alice prefers mornings\n")
+	if c.BotName != "" {
+		sb.WriteString("  [owner]: \"you should be more concise\" → The owner wants me to be more concise\n")
+	}
+	sb.WriteString("- Standing preferences/facts: present tense (\"Alice prefers...\", \"I should...\")\n")
+	sb.WriteString("- One-time events, approvals, specific actions: past tense + time reference.\n")
+	sb.WriteString("  Example: \"On Feb 21, the owner approved a restart\"\n")
+	sb.WriteString("  NEVER generalize a one-time approval into a standing permission.\n")
+	sb.WriteString("- Include ONLY information explicitly stated — do not infer or embellish.\n")
+	sb.WriteString("- Output ONLY the memory text, no preamble.\n\n")
+
+	timeStr := latest.Format("Jan 2, 2006 at 15:04")
+	sb.WriteString("Fragments (" + timeStr + "):\n")
+	for _, ep := range episodes {
+		label := c.labelFragment(ep)
+		if label != "" {
+			sb.WriteString(label + ": " + ep.Content + "\n")
+		} else {
+			sb.WriteString(ep.Content + "\n")
+		}
+	}
+
+	sb.WriteString("\nMemory:")
+	return sb.String()
 }
 
 // truncate shortens text to maxLen, adding ellipsis if needed

@@ -159,6 +159,30 @@ NER is optional — entities won't be extracted if not configured.
 | `enabled` | `true` | Whether to run background consolidation |
 | `interval` | `15m` | How often to consolidate (Go duration string) |
 
+### `identity`
+
+Configures the bot's identity for role-aware memory consolidation. When set, the consolidation pipeline labels each episode fragment by role (bot, owner, or third party) and generates memories with correct attribution and voice.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `name` | _(none)_ | Bot's display name, e.g. `"Bud"`. Used to identify the bot's own episodes. |
+| `author_id` | _(none)_ | Bot's author ID — matches `episode.author_id` set by callers. |
+| `owner_ids` | _(none)_ | Optional list of owner `author_id` values for owner-specific framing. |
+
+When `identity` is configured:
+- Episodes from the bot (`author_id` matches `identity.author_id`) are written in first person ("I should...")
+- Episodes from owners (`author_id` in `identity.owner_ids`) are attributed to "the owner" or their name
+- `POST /v1/thoughts` automatically sets `author` and `author_id` from `identity.name` / `identity.author_id`
+- One-time approvals ("ok you can restart") are anchored in time rather than treated as standing permissions
+
+```yaml
+identity:
+  name: "Bud"
+  author_id: "bud"
+  owner_ids:        # optional
+    - "thunder"
+```
+
 ### Environment Variables
 
 All config fields can be overridden with `ENGRAM_*` env vars:
@@ -179,6 +203,8 @@ All config fields can be overridden with `ENGRAM_*` env vars:
 | `ENGRAM_NER_PROVIDER` | `ner.provider` |
 | `ENGRAM_NER_MODEL` | `ner.model` |
 | `ENGRAM_NER_SPACY_URL` | `ner.spacy_url` |
+| `ENGRAM_IDENTITY_NAME` | `identity.name` |
+| `ENGRAM_IDENTITY_AUTHOR_ID` | `identity.author_id` |
 
 ---
 

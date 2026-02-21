@@ -97,6 +97,9 @@ func main() {
 
 		if llmClient != nil {
 			consolidator = consolidate.NewConsolidator(db, llmClient, claudeInfer)
+			consolidator.BotName = cfg.Identity.Name
+			consolidator.BotAuthorID = cfg.Identity.AuthorID
+			consolidator.OwnerIDs = cfg.Identity.OwnerIDs
 			logger.Info("consolidation enabled", "interval", cfg.Consolidation.Interval)
 		} else {
 			logger.Warn("consolidation disabled: no LLM client available")
@@ -110,6 +113,8 @@ func main() {
 		NERClient:    nerClient,
 		Consolidator: consolidator,
 		Logger:       logger,
+		BotName:      cfg.Identity.Name,
+		BotAuthorID:  cfg.Identity.AuthorID,
 	}
 
 	mcpSvc := &engrammcp.Services{
@@ -210,10 +215,6 @@ func (a *anthropicLLMClient) Embed(text string) ([]float64, error) {
 	return a.embed.Embed(text)
 }
 
-func (a *anthropicLLMClient) Summarize(fragments []string) (string, error) {
-	return a.embed.Summarize(fragments)
-}
-
 func (a *anthropicLLMClient) Generate(prompt string) (string, error) {
 	return a.anthropic.Generate(context.Background(), prompt)
 }
@@ -231,10 +232,6 @@ func newClaudeCodeLLMClient(embedClient *embed.Client, cc *consolidate.ClaudeCod
 
 func (c *claudeCodeLLMClient) Embed(text string) ([]float64, error) {
 	return c.embed.Embed(text)
-}
-
-func (c *claudeCodeLLMClient) Summarize(fragments []string) (string, error) {
-	return c.embed.Summarize(fragments)
 }
 
 func (c *claudeCodeLLMClient) Generate(prompt string) (string, error) {

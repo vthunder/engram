@@ -18,6 +18,7 @@ type Config struct {
 	Embedding     EmbeddingConfig     `yaml:"embedding"`
 	NER           NERConfig           `yaml:"ner"`
 	Consolidation ConsolidationConfig `yaml:"consolidation"`
+	Identity      IdentityConfig      `yaml:"identity"`
 }
 
 type ServerConfig struct {
@@ -52,6 +53,12 @@ type NERConfig struct {
 type ConsolidationConfig struct {
 	Enabled  bool          `yaml:"enabled"`
 	Interval time.Duration `yaml:"interval"`
+}
+
+type IdentityConfig struct {
+	Name     string   `yaml:"name"`      // Bot's display name, e.g. "Bud"
+	AuthorID string   `yaml:"author_id"` // Matches episode.author_id
+	OwnerIDs []string `yaml:"owner_ids"` // Optional; if empty, no owner distinction
 }
 
 // Load reads config from a YAML file and applies environment variable overrides.
@@ -148,6 +155,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := env("ENGRAM_NER_SPACY_URL"); v != "" {
 		cfg.NER.SpacyURL = v
+	}
+	if v := env("ENGRAM_IDENTITY_NAME"); v != "" {
+		cfg.Identity.Name = v
+	}
+	if v := env("ENGRAM_IDENTITY_AUTHOR_ID"); v != "" {
+		cfg.Identity.AuthorID = v
 	}
 }
 

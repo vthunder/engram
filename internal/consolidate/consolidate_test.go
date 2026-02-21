@@ -5,6 +5,7 @@ package consolidate
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,20 +42,33 @@ func (m *mockLLM) Embed(text string) ([]float64, error) {
 	return []float64{0.1, 0.2, 0.3, 0.4}, nil
 }
 
-func (m *mockLLM) Summarize(fragments []string) (string, error) {
-	// Return a simple concatenation
-	result := ""
-	for i, f := range fragments {
-		if i > 0 {
-			result += " | "
-		}
-		result += f
-	}
-	return result, nil
-}
-
 func (m *mockLLM) Generate(prompt string) (string, error) {
-	// Simple mock that just returns a truncated version of the prompt
+	// For consolidation prompts, extract fragment content so that classification
+	// functions (isEphemeralContent, classifyEngramType) work correctly in tests.
+	const fragHeader = "Fragments ("
+	const memMarker = "\nMemory:"
+	if idx := strings.Index(prompt, fragHeader); idx >= 0 {
+		lineEnd := strings.Index(prompt[idx:], "\n")
+		if lineEnd >= 0 {
+			section := prompt[idx+lineEnd+1:]
+			if memEnd := strings.Index(section, memMarker); memEnd >= 0 {
+				section = section[:memEnd]
+			}
+			var parts []string
+			for _, line := range strings.Split(strings.TrimSpace(section), "\n") {
+				if closing := strings.Index(line, "]: "); closing >= 0 {
+					line = line[closing+3:]
+				}
+				if line != "" {
+					parts = append(parts, line)
+				}
+			}
+			if len(parts) > 0 {
+				return strings.Join(parts, " "), nil
+			}
+		}
+	}
+	// Fallback for non-consolidation prompts (e.g. pyramid generation)
 	if len(prompt) > 100 {
 		return prompt[:100], nil
 	}
