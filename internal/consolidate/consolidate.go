@@ -61,6 +61,25 @@ func NewConsolidator(g *graph.DB, llm LLMClient, claude *ClaudeInference) *Conso
 }
 
 
+// ShouldRun returns true if at least one channel meets the consolidation trigger conditions:
+//   - at least minEpisodes unconsolidated episodes exist in the channel, AND
+//   - either the channel has been idle for idleTime, OR the channel has maxBuffer+ unconsolidated episodes
+func (c *Consolidator) ShouldRun(minEpisodes int, idleTime time.Duration, maxBuffer int) (bool, error) {
+	stats, err := c.graph.GetChannelConsolidationStats(minEpisodes)
+	if err != nil {
+		return false, fmt.Errorf("consolidation eligibility check: %w", err)
+	}
+	for _, s := range stats {
+		if s.UnconsolidatedCount >= maxBuffer {
+			return true, nil
+		}
+		if time.Since(s.LastEpisodeTime) >= idleTime {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // episodeGroup represents a group of related episodes to consolidate
 type episodeGroup struct {
 	episodes     []*graph.Episode

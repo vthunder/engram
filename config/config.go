@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,8 +52,11 @@ type NERConfig struct {
 }
 
 type ConsolidationConfig struct {
-	Enabled  bool          `yaml:"enabled"`
-	Interval time.Duration `yaml:"interval"`
+	Enabled     bool          `yaml:"enabled"`
+	Interval    time.Duration `yaml:"interval"`
+	MinEpisodes int           `yaml:"min_episodes"` // N — minimum unconsolidated episodes to be eligible
+	IdleTime    time.Duration `yaml:"idle_time"`    // T — time since last episode in a channel
+	MaxBuffer   int           `yaml:"max_buffer"`   // M — unconsolidated count that forces a run immediately
 }
 
 type IdentityConfig struct {
@@ -106,8 +110,11 @@ func defaults() *Config {
 			Model:    "qwen2.5:7b",
 		},
 		Consolidation: ConsolidationConfig{
-			Enabled:  true,
-			Interval: 15 * time.Minute,
+			Enabled:     true,
+			Interval:    15 * time.Minute,
+			MinEpisodes: 10,
+			IdleTime:    30 * time.Minute,
+			MaxBuffer:   100,
 		},
 	}
 }
@@ -161,6 +168,21 @@ func applyEnv(cfg *Config) {
 	}
 	if v := env("ENGRAM_IDENTITY_AUTHOR_ID"); v != "" {
 		cfg.Identity.AuthorID = v
+	}
+	if v := env("ENGRAM_CONSOLIDATION_MIN_EPISODES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Consolidation.MinEpisodes = n
+		}
+	}
+	if v := env("ENGRAM_CONSOLIDATION_IDLE_TIME"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.Consolidation.IdleTime = d
+		}
+	}
+	if v := env("ENGRAM_CONSOLIDATION_MAX_BUFFER"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Consolidation.MaxBuffer = n
+		}
 	}
 }
 

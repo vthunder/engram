@@ -182,6 +182,18 @@ services:
     command: ["--config", "/config/engram.yaml"]
 ```
 
+## Conversation context window
+
+Beyond spreading activation retrieval, Engram lets bots maintain a tiered conversation buffer — recent messages raw, older ones compressed, anything beyond the buffer retrievable as engrams. The `channel` field on episodes groups messages by conversation; `?before={id}` provides cursor-based pagination; `?level=N` applies pyramid compression in-band:
+
+```bash
+GET /v1/episodes?channel=guild:general&limit=10                                        # raw recent
+GET /v1/episodes?channel=guild:general&limit=20&before={ep10_id}&level=8              # compressed
+GET /v1/episodes?channel=guild:general&limit=70&before={ep30_id}&unconsolidated=true&level=8  # buffer
+```
+
+Setting `consolidation.max_buffer` equal to the bot's fetch limit ensures older episodes are always in one place or the other — never in limbo. See [API reference](docs/api.md#conversation-context-window) for the full pattern.
+
 ## Use cases
 
 - **Conversational agents** — persistent memory across sessions: preferences, decisions, relationship context

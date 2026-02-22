@@ -108,7 +108,18 @@ cd ner && uvicorn server:app --port 8001
 | Key | Default | Description |
 |-----|---------|-------------|
 | `enabled` | `true` | Run background consolidation |
-| `interval` | `15m` | How often to consolidate (Go duration string) |
+| `interval` | `15m` | How often to check consolidation eligibility (Go duration string) |
+| `min_episodes` | `10` | Minimum unconsolidated episodes in any channel before consolidation is eligible |
+| `idle_time` | `30m` | Time since last episode in a channel before that channel can trigger consolidation |
+| `max_buffer` | `100` | Unconsolidated episode count that triggers consolidation immediately, regardless of idle time |
+
+Consolidation now runs conditionally on each tick. For each channel with unconsolidated episodes, it checks:
+
+```
+unconsolidated_count >= min_episodes  AND  (idle_time elapsed  OR  unconsolidated_count >= max_buffer)
+```
+
+This prevents consolidation from firing mid-conversation (the `idle_time` gate) while ensuring the buffer doesn't grow unbounded (the `max_buffer` gate). Setting `max_buffer` equal to the bot's maximum unconsolidated episode fetch limit ensures older episodes are always reachable either via the unconsolidated buffer or as consolidated engrams retrievable by spreading activation.
 
 ---
 
@@ -159,3 +170,6 @@ All config fields can be set or overridden with `ENGRAM_*` environment variables
 | `ENGRAM_NER_SPACY_URL` | `ner.spacy_url` |
 | `ENGRAM_IDENTITY_NAME` | `identity.name` |
 | `ENGRAM_IDENTITY_AUTHOR_ID` | `identity.author_id` |
+| `ENGRAM_CONSOLIDATION_MIN_EPISODES` | `consolidation.min_episodes` |
+| `ENGRAM_CONSOLIDATION_IDLE_TIME` | `consolidation.idle_time` |
+| `ENGRAM_CONSOLIDATION_MAX_BUFFER` | `consolidation.max_buffer` |

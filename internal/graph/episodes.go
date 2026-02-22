@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/zeebo/blake3"
@@ -430,6 +431,131 @@ func (g *DB) GetEpisodeEntities(episodeID string) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+// ChannelConsolidationStat holds per-channel stats used by the consolidation trigger.
+type ChannelConsolidationStat struct {
+	Channel             string
+	UnconsolidatedCount int
+	LastEpisodeTime     time.Time
+}
+
+// GetChannelConsolidationStats returns per-channel unconsolidated episode counts and
+// last-episode timestamps for all channels with at least minEpisodes unconsolidated.
+// Used by the smart consolidation trigger in the background loop.
+func (g *DB) GetChannelConsolidationStats(minEpisodes int) ([]ChannelConsolidationStat, error) {
+	rows, err := g.db.Query(`
+		SELECT e.channel, COUNT(*) as cnt, MAX(e.timestamp_event) as last_time
+		FROM episodes e
+		LEFT JOIN engram_episodes ee ON ee.episode_id = e.id
+		WHERE ee.engram_id IS NULL
+		GROUP BY e.channel
+		HAVING COUNT(*) >= ?
+	`, minEpisodes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query channel consolidation stats: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []ChannelConsolidationStat
+	for rows.Next() {
+		var s ChannelConsolidationStat
+		var channel sql.NullString
+		if err := rows.Scan(&channel, &s.UnconsolidatedCount, &s.LastEpisodeTime); err != nil {
+			continue
+		}
+		s.Channel = channel.String
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
+// GetEpisodesFiltered is the general-purpose episode list query for the API.
+// It supports optional channel filtering, cursor-based pagination via beforeTimestamp,
+// and filtering to unconsolidated-only episodes. Results are ordered newest-first.
+// Embeddings are intentionally omitted for performance.
+func (g *DB) GetEpisodesFiltered(channel string, beforeTimestamp *time.Time, unconsolidatedOnly bool, limit int) ([]*Episode, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var sb strings.Builder
+	var args []any
+
+	sb.WriteString(`
+		SELECT e.id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
+			e.timestamp_event, e.timestamp_ingested, e.dialogue_act, e.entropy_score,
+			e.reply_to, e.authorization_checked, e.has_authorization, e.created_at
+		FROM episodes e`)
+
+	if unconsolidatedOnly {
+		sb.WriteString(`
+		LEFT JOIN engram_episodes ee ON ee.episode_id = e.id`)
+	}
+
+	sb.WriteString(`
+		WHERE 1=1`)
+
+	if channel != "" {
+		sb.WriteString(` AND e.channel = ?`)
+		args = append(args, channel)
+	}
+	if beforeTimestamp != nil {
+		sb.WriteString(` AND e.timestamp_event < ?`)
+		args = append(args, beforeTimestamp)
+	}
+	if unconsolidatedOnly {
+		sb.WriteString(` AND ee.engram_id IS NULL`)
+	}
+
+	sb.WriteString(`
+		ORDER BY e.timestamp_event DESC
+		LIMIT ?`)
+	args = append(args, limit)
+
+	rows, err := g.db.Query(sb.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query episodes: %w", err)
+	}
+	defer rows.Close()
+
+	var episodes []*Episode
+	for rows.Next() {
+		ep, err := scanEpisodeRowNoEmbedding(rows)
+		if err != nil {
+			continue
+		}
+		episodes = append(episodes, ep)
+	}
+	return episodes, rows.Err()
+}
+
+// CountEpisodesFiltered returns the episode count matching optional channel and
+// unconsolidated-only filters. Pass empty channel to include all channels.
+func (g *DB) CountEpisodesFiltered(channel string, unconsolidatedOnly bool) (int, error) {
+	var sb strings.Builder
+	var args []any
+
+	sb.WriteString(`SELECT COUNT(*) FROM episodes e`)
+
+	if unconsolidatedOnly {
+		sb.WriteString(`
+		LEFT JOIN engram_episodes ee ON ee.episode_id = e.id`)
+	}
+
+	sb.WriteString(` WHERE 1=1`)
+
+	if channel != "" {
+		sb.WriteString(` AND e.channel = ?`)
+		args = append(args, channel)
+	}
+	if unconsolidatedOnly {
+		sb.WriteString(` AND ee.engram_id IS NULL`)
+	}
+
+	var count int
+	err := g.db.QueryRow(sb.String(), args...).Scan(&count)
+	return count, err
 }
 
 // scanEpisode scans a single row into an Episode

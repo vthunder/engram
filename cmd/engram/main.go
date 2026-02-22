@@ -129,7 +129,7 @@ func main() {
 	defer cancel()
 
 	if consolidator != nil && cfg.Consolidation.Interval > 0 {
-		go runConsolidation(ctx, consolidator, cfg.Consolidation.Interval, logger)
+		go runConsolidation(ctx, consolidator, cfg.Consolidation, logger)
 	}
 
 	// REST server
@@ -178,14 +178,22 @@ func main() {
 	logger.Info("engram stopped")
 }
 
-func runConsolidation(ctx context.Context, c *consolidate.Consolidator, interval time.Duration, logger *slog.Logger) {
-	ticker := time.NewTicker(interval)
+func runConsolidation(ctx context.Context, c *consolidate.Consolidator, cfg config.ConsolidationConfig, logger *slog.Logger) {
+	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			ok, err := c.ShouldRun(cfg.MinEpisodes, cfg.IdleTime, cfg.MaxBuffer)
+			if err != nil {
+				logger.Warn("consolidation eligibility check failed", "err", err)
+				continue
+			}
+			if !ok {
+				continue
+			}
 			start := time.Now()
 			created, err := c.Run()
 			if err != nil {

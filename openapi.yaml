@@ -276,10 +276,13 @@ paths:
     get:
       summary: List or search episodes
       description: |
-        List raw episodes, or search them by text with `?query=`.
+        List raw episodes with optional filtering, or search by text with `?query=`.
 
         **Default response** is minimal: `[{id, content}]`.
         Add `?detail=full` for all fields (embeddings are never returned).
+
+        Filters `channel`, `unconsolidated`, `before`, and `level` compose freely.
+        The `?query=` text search path does not combine with these filters.
       operationId: listEpisodes
       tags:
         - Episodes
@@ -288,7 +291,35 @@ paths:
           in: query
           schema:
             type: string
-          description: Text substring search over episode content
+          description: Text substring search over episode content. Does not combine with other filters.
+        - name: channel
+          in: query
+          schema:
+            type: string
+          description: Filter by channel value
+        - name: unconsolidated
+          in: query
+          schema:
+            type: boolean
+          description: "If true, return only episodes not yet part of any engram"
+        - name: before
+          in: query
+          schema:
+            type: string
+          description: |
+            Cursor-based pagination. Return only episodes older than this episode ID
+            (full 32-char ID or 5-char prefix). Returns 400 if the ID is not found.
+        - name: level
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+          description: |
+            Apply pyramid compression to the `content` field before returning.
+            Valid targets: 4, 8, 16, 32, 64 (approx word count).
+            Episodes with no pre-generated summary at the requested level return raw content.
+            0 = verbatim (default).
         - name: detail
           in: query
           schema:
@@ -299,8 +330,8 @@ paths:
           in: query
           schema:
             type: integer
-            default: 100
-          description: Maximum results (default 100 for list-all, 10 when using ?query=)
+            default: 50
+          description: Maximum results (default 50)
       responses:
         "200":
           description: List of episodes (minimal by default)
@@ -310,6 +341,12 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Episode"
+        "400":
+          description: Invalid `before` episode ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Database error
           content:
@@ -434,6 +471,160 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/episodes/count:
+    get:
+      summary: Count episodes
+      description: |
+        Returns the episode count matching optional filters.
+
+        | Request | Returns |
+        |---------|---------|
+        | (no params) | Total episode count |
+        | `?unconsolidated=true` | Global unconsolidated count |
+        | `?channel=X` | Total for channel |
+        | `?channel=X&unconsolidated=true` | Unconsolidated count for channel |
+      operationId: countEpisodes
+      tags:
+        - Episodes
+      parameters:
+        - name: channel
+          in: query
+          schema:
+            type: string
+          description: Filter by channel value
+        - name: unconsolidated
+          in: query
+          schema:
+            type: boolean
+          description: "If true, count only unconsolidated episodes"
+      responses:
+        "200":
+          description: Episode count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/episodes/summaries:
+    post:
+      summary: Batch fetch episode pyramid summaries
+      description: |
+        Returns pyramid summaries for a set of episode IDs at the requested compression level.
+        Episodes with no pre-generated summary at the requested level are absent from the result.
+        Valid levels: 4, 8, 16, 32, 64.
+      operationId: batchEpisodeSummaries
+      tags:
+        - Episodes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - episode_ids
+                - level
+              properties:
+                episode_ids:
+                  type: array
+                  items:
+                    type: string
+                  description: List of episode IDs (full or 5-char prefix)
+                level:
+                  type: integer
+                  description: "Compression level: 4, 8, 16, 32, or 64"
+                  example: 8
+      responses:
+        "200":
+          description: Map of episode ID to summary string
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/episodes/{id}/edges:
+    post:
+      summary: Add an edge between episodes
+      description: |
+        Create a directed structural edge from `{id}` to another episode.
+        Edge types: `REPLIES_TO`, `FOLLOWS`, `RELATED_TO`. Defaults to `FOLLOWS`.
+      operationId: addEpisodeEdge
+      tags:
+        - Episodes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source episode ID (full or 5-char prefix)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - to_id
+              properties:
+                to_id:
+                  type: string
+                  description: Target episode ID
+                edge_type:
+                  type: string
+                  description: "Edge type. Default: FOLLOWS"
+                  example: "REPLIES_TO"
+                confidence:
+                  type: number
+                  format: double
+                  description: "Edge confidence (0.0–1.0). Default: 1.0"
+      responses:
+        "201":
+          description: Edge created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        "400":
+          description: Missing to_id or invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/consolidate:
     post:
       summary: Trigger consolidation
@@ -533,6 +724,36 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 
   /v1/engrams/{id}:
+    delete:
+      summary: Delete an engram
+      description: |
+        Permanently delete an engram by its full ID or 5-character short ID.
+        Cascades to associated summary records and edge links.
+      operationId: deleteEngram
+      tags:
+        - Engrams
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full engram ID or 5-char short ID
+      responses:
+        "204":
+          description: Engram deleted
+        "404":
+          description: Engram not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     get:
       summary: Get an engram
       description: |

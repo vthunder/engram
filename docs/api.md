@@ -12,8 +12,8 @@ A full OpenAPI 3.0 specification is at [`openapi.yaml`](../openapi.yaml).
 |--------|------|-------------|
 | `GET` | `/health` | Service health check (public) |
 | `POST` | `/v1/episodes` | Ingest a raw episode |
-| `GET` | `/v1/episodes` | List episodes; `?query=` for substring search |
-| `GET` | `/v1/episodes/count` | Total episode count |
+| `GET` | `/v1/episodes` | List episodes; `?query=`, `?channel=`, `?unconsolidated=`, `?before={id}`, `?level=N` |
+| `GET` | `/v1/episodes/count` | Episode count; `?channel=`, `?unconsolidated=` filters |
 | `GET` | `/v1/episodes/{id}` | Get episode by ID or 5-char prefix |
 | `POST` | `/v1/episodes/summaries` | Batch fetch pyramid summaries for episode IDs |
 | `POST` | `/v1/episodes/{id}/edges` | Add a typed edge between two episodes |
@@ -125,9 +125,15 @@ Edge types: `REPLIES_TO`, `FOLLOWS`, `RELATED_TO`.
 List episodes. Returns `[{id, content}]` by default.
 
 Query params:
-- `query` — substring search over episode content
-- `detail=full` — return all fields
-- `limit` — max results (default 100; default 10 when using `?query=`)
+- `query` — substring search over episode content (does not combine with other filters)
+- `channel` — filter by channel value
+- `unconsolidated=true` — only return episodes not yet part of any engram
+- `before={id}` — return only episodes older than the given episode ID (full or 5-char prefix); used for cursor-based pagination. Returns `400` if the ID is not found.
+- `level=N` — apply pyramid compression to the `content` field before returning. Same levels as engrams: `4`, `8`, `16`, `32`, `64`. Episodes without a pre-generated summary at the requested level return raw content.
+- `detail=full` — return all fields (applies after `?level=N` compression)
+- `limit` — max results (default 50)
+
+All filters except `query` compose: `?channel=X&unconsolidated=true&before={id}&level=8` is a valid combination.
 
 #### `GET /v1/episodes/{id}`
 
@@ -137,11 +143,20 @@ Add `?detail=full` to include all fields.
 
 #### `GET /v1/episodes/count`
 
-Returns the total episode count.
+Returns the episode count matching optional filters.
 
-```json
-{"count": 1482}
-```
+Query params:
+- `channel` — filter by channel
+- `unconsolidated=true` — count only unconsolidated episodes
+
+| Request | Returns |
+|---------|---------|
+| `/v1/episodes/count` | Total episode count |
+| `/v1/episodes/count?unconsolidated=true` | Global unconsolidated count |
+| `/v1/episodes/count?channel=X` | Total for channel |
+| `/v1/episodes/count?channel=X&unconsolidated=true` | Unconsolidated count for channel |
+
+Response: `{"count": 1482}`
 
 #### `POST /v1/episodes/summaries`
 
@@ -149,16 +164,38 @@ Batch fetch pyramid summaries for a list of episode IDs.
 
 Request:
 ```json
-{"ids": ["a3f2b9c1", "b5c8d1e4"], "level": 8}
+{"episode_ids": ["a3f2b9c1", "b5c8d1e4"], "level": 8}
 ```
 
-Response:
+Response: map of episode ID → summary string. Episodes with no pre-generated summary at the requested level are absent from the result.
+
 ```json
-[
-  {"id": "a3f2b9c1...", "summary": "Alice prefers mornings"},
-  {"id": "b5c8d1e4...", "summary": "Bob deadline follow-up"}
-]
+{"a3f2b9c1...": "Alice prefers mornings", "b5c8d1e4...": "Bob deadline follow-up"}
 ```
+
+---
+
+### Conversation context window
+
+A bot maintaining a tiered conversation buffer queries episodes in tranches — most recent raw, older compressed, unconsolidated-only beyond that:
+
+```bash
+# 1. Most recent 10 episodes — raw
+GET /v1/episodes?channel=guild:general&limit=10
+
+# 2. Episodes 11–30 — compressed to ~8 words each
+#    (use the ID of the oldest episode from step 1 as cursor)
+GET /v1/episodes?channel=guild:general&limit=20&before={ep10_id}&level=8
+
+# 3. Up to 70 unconsolidated episodes beyond the recent window — compressed
+#    (use the ID of the oldest episode from step 2 as cursor)
+GET /v1/episodes?channel=guild:general&limit=70&before={ep30_id}&unconsolidated=true&level=8
+
+# Optional: check buffer size before fetching
+GET /v1/episodes/count?channel=guild:general&unconsolidated=true
+```
+
+The third query returns an empty list once all older episodes have been consolidated — they are then reachable via `GET /v1/engrams?query=...` (spreading activation search). Setting `consolidation.max_buffer` to match the bot's fetch limit (e.g. `100`) ensures episodes are always accessible via one path or the other.
 
 ---
 

@@ -88,6 +88,28 @@ func applyEntityLevels(g *graph.DB, entities []*graph.Entity, level int) {
 	}
 }
 
+// applyEpisodeLevels replaces each episode's Content with the pyramid summary at the
+// requested level (batch query). A no-op when level == 0.
+// Episodes with no pre-generated summary at the requested level retain their original content.
+func applyEpisodeLevels(g *graph.DB, episodes []*graph.Episode, level int) {
+	if level == 0 || len(episodes) == 0 {
+		return
+	}
+	ids := make([]string, len(episodes))
+	for i, e := range episodes {
+		ids[i] = e.ID
+	}
+	summaries, err := g.GetEpisodeSummariesBatch(ids, level)
+	if err != nil {
+		return
+	}
+	for _, e := range episodes {
+		if s, ok := summaries[e.ID]; ok {
+			e.Content = s.Summary
+		}
+	}
+}
+
 // parseLevel parses ?level= (0 = verbatim/default).
 func parseLevel(r *http.Request) int {
 	if lv := r.URL.Query().Get("level"); lv != "" {
@@ -515,16 +537,18 @@ func (s *Services) handleGetEngramContext(w http.ResponseWriter, r *http.Request
 
 func (s *Services) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 	full := parseDetail(r)
+	level := parseLevel(r)
 	queryStr := r.URL.Query().Get("query")
 	limit := parseLimit(r, 50)
 
-	// Text search path
+	// Text search path (does not support before/level/unconsolidated filters)
 	if queryStr != "" {
 		episodes, err := s.Graph.SearchEpisodesByText(queryStr, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}
+		applyEpisodeLevels(s.Graph, episodes, level)
 		writeEpisodeList(w, episodes, full)
 		return
 	}
@@ -532,25 +556,33 @@ func (s *Services) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 	channel := r.URL.Query().Get("channel")
 	unconsolidated := r.URL.Query().Get("unconsolidated") == "true"
 
-	if unconsolidated {
-		ids, err := s.Graph.GetUnconsolidatedEpisodeIDsForChannel(channel)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-			return
+	// Resolve ?before={id} to a timestamp cursor
+	var beforeTimestamp *time.Time
+	if beforeID := r.URL.Query().Get("before"); beforeID != "" {
+		ref, err := s.Graph.GetEpisode(beforeID)
+		if err != nil || ref == nil {
+			// Try prefix resolution
+			fullID, resolveErr := s.Graph.ResolveEpisodeID(beforeID)
+			if resolveErr != nil {
+				writeError(w, http.StatusBadRequest, "invalid_request", "before: episode not found")
+				return
+			}
+			ref, err = s.Graph.GetEpisode(fullID)
+			if err != nil || ref == nil {
+				writeError(w, http.StatusBadRequest, "invalid_request", "before: episode not found")
+				return
+			}
 		}
-		result := make([]string, 0, len(ids))
-		for id := range ids {
-			result = append(result, id)
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ids": result})
-		return
+		t := ref.TimestampEvent
+		beforeTimestamp = &t
 	}
 
-	episodes, err := s.Graph.GetRecentEpisodes(channel, limit)
+	episodes, err := s.Graph.GetEpisodesFiltered(channel, beforeTimestamp, unconsolidated, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
+	applyEpisodeLevels(s.Graph, episodes, level)
 	writeEpisodeList(w, episodes, full)
 }
 
@@ -628,15 +660,15 @@ func (s *Services) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleEpisodeCount returns the count of episodes matching a filter.
+// handleEpisodeCount returns the count of episodes matching optional filters.
+// GET /v1/episodes/count
 // GET /v1/episodes/count?unconsolidated=true
+// GET /v1/episodes/count?channel=X
+// GET /v1/episodes/count?channel=X&unconsolidated=true
 func (s *Services) handleEpisodeCount(w http.ResponseWriter, r *http.Request) {
+	channel := r.URL.Query().Get("channel")
 	unconsolidated := r.URL.Query().Get("unconsolidated") == "true"
-	if !unconsolidated {
-		writeError(w, http.StatusBadRequest, "invalid_request", "only ?unconsolidated=true is supported")
-		return
-	}
-	count, err := s.Graph.GetUnconsolidatedEpisodeCount()
+	count, err := s.Graph.CountEpisodesFiltered(channel, unconsolidated)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
