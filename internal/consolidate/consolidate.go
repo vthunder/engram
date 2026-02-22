@@ -1289,9 +1289,7 @@ func (c *Consolidator) inferEpisodeEpisodeLinks(ctx context.Context, episodes []
 		}
 
 		windowNum++
-		if windowNum == 1 || windowNum%10 == 0 {
-			log.Printf("[consolidate] Edge inference: window %d/%d", windowNum, totalWindows)
-		}
+		log.Printf("[consolidate] Edge inference: window %d/%d", windowNum, totalWindows)
 
 		// Create episodesWithSummary slice for Claude
 		episodesForInference := make([]EpisodeForInference, len(enrichedBatch))
