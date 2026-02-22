@@ -398,15 +398,20 @@ func TestGetEpisode_Found(t *testing.T) {
 
 // --- Episode count ---
 
-func TestEpisodeCount_MissingParam(t *testing.T) {
+func TestEpisodeCount_DefaultsToAll(t *testing.T) {
+	// Omitting ?unconsolidated=true is valid; the handler counts all episodes.
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
 	resp := doRequest(t, srv, http.MethodGet, "/v1/episodes/count", "")
-	defer resp.Body.Close()
+	var result map[string]any
+	decodeJSON(t, resp, &result)
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400 without ?unconsolidated=true, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for /v1/episodes/count (no params), got %d", resp.StatusCode)
+	}
+	if _, ok := result["count"]; !ok {
+		t.Errorf("expected count field in response, got %v", result)
 	}
 }
 
