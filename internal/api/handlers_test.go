@@ -396,6 +396,137 @@ func TestGetEpisode_Found(t *testing.T) {
 	}
 }
 
+// --- Episode count ---
+
+func TestEpisodeCount_MissingParam(t *testing.T) {
+	_, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	resp := doRequest(t, srv, http.MethodGet, "/v1/episodes/count", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 without ?unconsolidated=true, got %d", resp.StatusCode)
+	}
+}
+
+func TestEpisodeCount_Empty(t *testing.T) {
+	_, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	resp := doRequest(t, srv, http.MethodGet, "/v1/episodes/count?unconsolidated=true", "")
+	var result map[string]any
+	decodeJSON(t, resp, &result)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	count, ok := result["count"].(float64)
+	if !ok {
+		t.Fatalf("expected numeric count field, got %T: %v", result["count"], result["count"])
+	}
+	if count != 0 {
+		t.Errorf("expected count=0 on empty DB, got %v", count)
+	}
+}
+
+func TestEpisodeCount_WithEpisodes(t *testing.T) {
+	svc, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	for i, id := range []string{"ep-count-1", "ep-count-2"} {
+		ep := &graph.Episode{
+			ID:             id,
+			Content:        "content " + string(rune('A'+i)),
+			Source:         "test",
+			TimestampEvent: time.Now(),
+		}
+		if err := svc.Graph.AddEpisode(ep); err != nil {
+			t.Fatalf("AddEpisode failed: %v", err)
+		}
+	}
+
+	resp := doRequest(t, srv, http.MethodGet, "/v1/episodes/count?unconsolidated=true", "")
+	var result map[string]any
+	decodeJSON(t, resp, &result)
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	count, ok := result["count"].(float64)
+	if !ok {
+		t.Fatalf("expected numeric count field, got %T: %v", result["count"], result["count"])
+	}
+	if count != 2 {
+		t.Errorf("expected count=2, got %v", count)
+	}
+}
+
+// --- Episode edges ---
+
+func TestAddEpisodeEdge_MissingToID(t *testing.T) {
+	_, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	body := `{"edge_type":"follows","confidence":1.0}`
+	resp := doRequest(t, srv, http.MethodPost, "/v1/episodes/ep-edge-from/edges", body)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 when to_id missing, got %d", resp.StatusCode)
+	}
+}
+
+func TestAddEpisodeEdge_Success(t *testing.T) {
+	svc, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	for _, ep := range []*graph.Episode{
+		{ID: "ep-from", Content: "first message", Source: "test", TimestampEvent: time.Now()},
+		{ID: "ep-to", Content: "second message", Source: "test", TimestampEvent: time.Now()},
+	} {
+		if err := svc.Graph.AddEpisode(ep); err != nil {
+			t.Fatalf("AddEpisode failed: %v", err)
+		}
+	}
+
+	body := `{"to_id":"ep-to","edge_type":"follows","confidence":1.0}`
+	resp := doRequest(t, srv, http.MethodPost, "/v1/episodes/ep-from/edges", body)
+	var result map[string]any
+	decodeJSON(t, resp, &result)
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("expected 201, got %d", resp.StatusCode)
+	}
+	if result["ok"] != true {
+		t.Errorf("expected ok=true, got %v", result["ok"])
+	}
+}
+
+func TestAddEpisodeEdge_DefaultsApplied(t *testing.T) {
+	svc, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	for _, ep := range []*graph.Episode{
+		{ID: "ep-def-from", Content: "msg a", Source: "test", TimestampEvent: time.Now()},
+		{ID: "ep-def-to", Content: "msg b", Source: "test", TimestampEvent: time.Now()},
+	} {
+		if err := svc.Graph.AddEpisode(ep); err != nil {
+			t.Fatalf("AddEpisode failed: %v", err)
+		}
+	}
+
+	// Omit edge_type and confidence — handler should default to "follows" / 1.0
+	body := `{"to_id":"ep-def-to"}`
+	resp := doRequest(t, srv, http.MethodPost, "/v1/episodes/ep-def-from/edges", body)
+	var result map[string]any
+	decodeJSON(t, resp, &result)
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Errorf("expected 201 with defaults applied, got %d", resp.StatusCode)
+	}
+}
+
 // --- Entities ---
 
 func TestListEntities_Empty(t *testing.T) {
