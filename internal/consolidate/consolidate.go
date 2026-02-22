@@ -9,6 +9,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vthunder/engram/internal/filter"
@@ -23,6 +24,7 @@ type LLMClient interface {
 
 // Consolidator handles memory consolidation
 type Consolidator struct {
+	mu    sync.Mutex
 	graph  *graph.DB
 	llm    LLMClient
 
@@ -95,6 +97,12 @@ type episodeGroup struct {
 // Phase 2: Graph clustering using those edges → episode groups
 // Phase 3: Create traces from clustered groups
 func (c *Consolidator) Run() (int, error) {
+	if !c.mu.TryLock() {
+		log.Printf("[consolidate] Run skipped: consolidation already in progress")
+		return 0, nil
+	}
+	defer c.mu.Unlock()
+
 	totalCreated := 0
 	var prevEpisodeIDs map[string]bool
 
