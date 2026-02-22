@@ -192,7 +192,8 @@ services:
 ## Docs
 
 - [Configuration reference](docs/configuration.md) — all config keys, environment variable overrides
-- [REST API reference](docs/api.md) — all endpoints, request/response shapes, MCP tools
+- [REST API reference](docs/api.md) — all endpoints, request/response shapes
+- [MCP tools reference](docs/mcp.md) — tools available to Claude agents, usage patterns
 - [OpenAPI spec](openapi.yaml)
 
 ## License

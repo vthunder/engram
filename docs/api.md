@@ -6,6 +6,32 @@ All `/v1/*` endpoints require `Authorization: Bearer <api_key>`. The `/health` e
 
 A full OpenAPI 3.0 specification is at [`openapi.yaml`](../openapi.yaml).
 
+### Endpoint summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Service health check (public) |
+| `POST` | `/v1/episodes` | Ingest a raw episode |
+| `GET` | `/v1/episodes` | List episodes; `?query=` for substring search |
+| `GET` | `/v1/episodes/count` | Total episode count |
+| `GET` | `/v1/episodes/{id}` | Get episode by ID or 5-char prefix |
+| `POST` | `/v1/episodes/summaries` | Batch fetch pyramid summaries for episode IDs |
+| `POST` | `/v1/episodes/{id}/edges` | Add a typed edge between two episodes |
+| `POST` | `/v1/thoughts` | Ingest a free-form thought (shorthand for episodes) |
+| `GET` | `/v1/engrams` | List engrams; `?query=` triggers spreading activation |
+| `GET` | `/v1/engrams/{id}` | Get engram by ID; `?level=N` for pyramid compression |
+| `DELETE` | `/v1/engrams/{id}` | Delete an engram |
+| `GET` | `/v1/engrams/{id}/context` | Engram + source episodes + linked entities |
+| `POST` | `/v1/engrams/{id}/reinforce` | Boost activation and optionally blend embedding |
+| `POST` | `/v1/engrams/boost` | Batch activation boost |
+| `GET` | `/v1/entities` | List entities; `?query=`, `?type=` filters |
+| `GET` | `/v1/entities/{id}` | Get entity by canonical ID |
+| `GET` | `/v1/entities/{id}/engrams` | All engrams linked to an entity |
+| `POST` | `/v1/consolidate` | Trigger consolidation pipeline manually |
+| `POST` | `/v1/activation/decay` | Apply exponential decay to all engram activations |
+| `POST` | `/v1/memory/flush` | Alias for `/v1/consolidate` |
+| `DELETE` | `/v1/memory/reset` | **Destructive** — wipe all memory |
+
 ---
 
 ### Health
