@@ -346,9 +346,9 @@ Alias for `POST /v1/consolidate`.
 
 #### `POST /v1/activation/decay`
 
-Apply exponential decay to all engram activations. Run periodically to implement forgetting. Operational engrams decay at 3× the base rate.
+Trigger an immediate exponential decay pass over all engram activations. Engram runs this automatically in the background on the configured `decay.interval` (default: every hour) — clients no longer need to schedule it. Use this endpoint to force an immediate pass, or to apply custom lambda/floor values for a one-off run. Operational engrams decay at 3× the base rate.
 
-Request (all optional):
+Request (all optional; omit to use server-configured defaults):
 ```json
 {"lambda": 0.01, "floor": 0.05}
 ```

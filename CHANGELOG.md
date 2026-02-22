@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Automatic background decay.** Engram now runs activation decay on a configurable interval (default: every hour) without requiring clients to call `POST /v1/activation/decay` on a schedule. Configure via the new `decay` config block (`interval`, `lambda`, `floor`). The endpoint remains for manual/one-off use.
+
+---
+
 ## [0.1.0] - 2026-02-21
 
 Initial public release. Engram is a standalone episodic memory service for AI agents, extracted from [Bud](https://github.com/vthunder/bud2).

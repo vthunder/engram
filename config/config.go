@@ -19,6 +19,7 @@ type Config struct {
 	Embedding     EmbeddingConfig     `yaml:"embedding"`
 	NER           NERConfig           `yaml:"ner"`
 	Consolidation ConsolidationConfig `yaml:"consolidation"`
+	Decay         DecayConfig         `yaml:"decay"`
 	Identity      IdentityConfig      `yaml:"identity"`
 }
 
@@ -57,6 +58,12 @@ type ConsolidationConfig struct {
 	MinEpisodes int           `yaml:"min_episodes"` // N — minimum unconsolidated episodes to be eligible
 	IdleTime    time.Duration `yaml:"idle_time"`    // T — time since last episode in a channel
 	MaxBuffer   int           `yaml:"max_buffer"`   // M — unconsolidated count that forces a run immediately
+}
+
+type DecayConfig struct {
+	Interval time.Duration `yaml:"interval"` // how often to run background decay (0 = disabled)
+	Lambda   float64       `yaml:"lambda"`   // exponential decay coefficient
+	Floor    float64       `yaml:"floor"`    // minimum activation level
 }
 
 type IdentityConfig struct {
@@ -115,6 +122,11 @@ func defaults() *Config {
 			MinEpisodes: 10,
 			IdleTime:    30 * time.Minute,
 			MaxBuffer:   100,
+		},
+		Decay: DecayConfig{
+			Interval: 1 * time.Hour,
+			Lambda:   0.005,
+			Floor:    0.01,
 		},
 	}
 }

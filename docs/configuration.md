@@ -123,6 +123,28 @@ This prevents consolidation from firing mid-conversation (the `idle_time` gate) 
 
 ---
 
+## `decay`
+
+Controls automatic background activation decay. Engram applies exponential decay to all engram activations on each tick — no client scheduling required. Operational engrams decay at 3× the base rate.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `interval` | `1h` | How often to run decay (Go duration string). Set to `0` to disable. |
+| `lambda` | `0.005` | Exponential decay coefficient λ. Higher values = faster forgetting. |
+| `floor` | `0.01` | Minimum activation level — engrams never decay below this value. |
+
+The decay formula applied to each engram:
+
+```
+new_activation = current_activation × exp(−λ × hours_since_last_access)
+```
+
+`lambda` of `0.005` causes an engram that hasn't been accessed for 7 days to retain roughly 70% activation; after 30 days, ~67%; after 90 days, ~50%. Reinforce engrams with `POST /v1/engrams/{id}/reinforce` to reset their `last_accessed` timestamp and slow decay.
+
+`POST /v1/activation/decay` remains available for manual or one-off decay runs.
+
+---
+
 ## `identity`
 
 When set, the consolidation pipeline uses role-aware memory formation. The bot's own episodes are written in first person; owner episodes are attributed by name; third-party episodes are attributed correctly. One-time approvals ("ok you can restart") are recorded with temporal anchoring rather than as standing permissions.
@@ -173,3 +195,5 @@ All config fields can be set or overridden with `ENGRAM_*` environment variables
 | `ENGRAM_CONSOLIDATION_MIN_EPISODES` | `consolidation.min_episodes` |
 | `ENGRAM_CONSOLIDATION_IDLE_TIME` | `consolidation.idle_time` |
 | `ENGRAM_CONSOLIDATION_MAX_BUFFER` | `consolidation.max_buffer` |
+
+Decay does not currently have env var overrides; configure it via the YAML file.

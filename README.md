@@ -14,7 +14,7 @@ Engram is grounded in the [Synapse](https://arxiv.org/abs/2601.02744) spreading 
 
 - **Episodes consolidate into engrams.** Raw observations are transient. Repeated or semantically related episodes consolidate — via LLM summarization — into durable structured memories called engrams.
 - **New memories are labile.** For 24 hours after formation, a memory can be updated by new related episodes. After that window closes, it freezes. This mimics the molecular biology of memory consolidation.
-- **Memory fades.** Engrams decay exponentially over time. Operational details (meeting reminders, deploy notes) decay faster than knowledge (facts, decisions, preferences). Access slows decay; reinforcement reverses it.
+- **Memory fades automatically.** Engrams decay exponentially over time — handled by a background process, no client scheduling needed. Operational details (meeting reminders, deploy notes) decay faster than knowledge (facts, decisions, preferences). Access slows decay; reinforcement reverses it.
 - **Retrieval is activation, not lookup.** A query seeds a spreading activation process — not a vector search — that propagates through the memory graph, surfacing relevant engrams even when they don't directly match the query.
 
 ## The Approach
@@ -83,6 +83,11 @@ ner:
 consolidation:
   enabled: true
   interval: "15m"
+
+decay:
+  interval: "1h"    # run decay every hour (set to 0 to disable)
+  lambda: 0.005     # exponential decay rate
+  floor: 0.01       # minimum activation level
 ```
 
 ```bash
