@@ -198,6 +198,7 @@ func runConsolidation(ctx context.Context, c *consolidate.Consolidator, cfg conf
 			if !ok {
 				continue
 			}
+			logger.Info("background consolidation starting")
 			start := time.Now()
 			created, err := c.Run()
 			if err != nil {
