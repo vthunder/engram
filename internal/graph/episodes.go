@@ -461,10 +461,14 @@ func (g *DB) GetChannelConsolidationStats(minEpisodes int) ([]ChannelConsolidati
 	for rows.Next() {
 		var s ChannelConsolidationStat
 		var channel sql.NullString
-		if err := rows.Scan(&channel, &s.UnconsolidatedCount, &s.LastEpisodeTime); err != nil {
-			continue
+		var lastTimeStr string
+		if err := rows.Scan(&channel, &s.UnconsolidatedCount, &lastTimeStr); err != nil {
+			return nil, fmt.Errorf("scanning channel consolidation stat: %w", err)
 		}
 		s.Channel = channel.String
+		if t, err := parseTimestamp(lastTimeStr); err == nil {
+			s.LastEpisodeTime = t
+		}
 		stats = append(stats, s)
 	}
 	return stats, rows.Err()

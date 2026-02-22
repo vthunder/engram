@@ -1202,3 +1202,26 @@ func cosineSim(a, b []float64) float64 {
 
 	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
 }
+
+// parseTimestamp parses a SQLite datetime string into time.Time.
+// Used when scanning aggregate columns (e.g. MAX(timestamp_event)) whose
+// declared column type is lost, preventing the driver from auto-converting.
+var timestampFormats = []string{
+	"2006-01-02T15:04:05.999999999Z07:00",
+	"2006-01-02 15:04:05.999999999Z07:00",
+	"2006-01-02T15:04:05Z07:00",
+	"2006-01-02 15:04:05Z07:00",
+	"2006-01-02T15:04:05.999999999",
+	"2006-01-02 15:04:05.999999999",
+	"2006-01-02T15:04:05",
+	"2006-01-02 15:04:05",
+}
+
+func parseTimestamp(s string) (time.Time, error) {
+	for _, layout := range timestampFormats {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unrecognised timestamp format: %q", s)
+}
