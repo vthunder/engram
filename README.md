@@ -1,33 +1,47 @@
 # Engram
 
-Standalone memory service for AI agents — three-tier graph-based episodic memory with embeddings, NER, spreading activation, and consolidation.
+**Episodic memory service for AI agents — automatic consolidation, neuroscience-inspired retrieval.**
 
-Extracted from [Bud](https://github.com/vthunder/bud2) and designed to be reusable by any Discord bot, Slack bot, or AI agent.
+## The Problem
 
-## Overview
+AI agents are stateless. When a bot conversation ends, every observation, preference, and decision it accumulated is gone. Naive solutions make this worse: storing raw messages and doing keyword search gives you a log, not a memory. Flat embeddings + cosine similarity retrieves what *matches* your query, not what's *relevant* to it.
 
-Engram stores memories in a three-tier graph:
+Real memory isn't lookup. It's association: a question about Alice surfaces what you know about Alice's team, her preferences, a decision made last month that affects the answer. Getting there requires structure the agent didn't have to build manually.
+
+## The Inspiration
+
+Engram is grounded in the [Synapse](https://arxiv.org/abs/2601.02744) spreading activation model and the neuroscience of episodic memory. The key ideas:
+
+- **Episodes consolidate into engrams.** Raw observations are transient. Repeated or semantically related episodes consolidate — via LLM summarization — into durable structured memories called engrams.
+- **New memories are labile.** For 24 hours after formation, a memory can be updated by new related episodes. After that window closes, it freezes. This mimics the molecular biology of memory consolidation.
+- **Memory fades.** Engrams decay exponentially over time. Operational details (meeting reminders, deploy notes) decay faster than knowledge (facts, decisions, preferences). Access slows decay; reinforcement reverses it.
+- **Retrieval is activation, not lookup.** A query seeds a spreading activation process — not a vector search — that propagates through the memory graph, surfacing relevant engrams even when they don't directly match the query.
+
+## The Approach
+
+Engram runs as a sidecar service. Any agent — Discord bot, Slack bot, Claude agent via MCP — posts raw observations to Engram, then queries it at retrieval time. The service handles everything else.
+
+**Three memory tiers:**
 
 | Tier | Type | Description |
 |------|------|-------------|
-| 1 | **Episodes** | Raw ingested messages, events, or observations |
-| 2 | **Entities** | Named entities extracted from episodes (people, orgs, places, etc.) |
-| 3 | **Engrams** | Consolidated memory summaries, built from episode clusters |
+| 1 | **Episodes** | Raw ingested messages, events, observations — lossless |
+| 2 | **Entities** | Named entities (people, orgs, technologies) extracted by NER |
+| 3 | **Engrams** | LLM-consolidated memory summaries, the primary retrieval target |
 
-The retrieval algorithm uses **spreading activation**: a dual-trigger seed (semantic vector similarity + lexical FTS5) that propagates through the graph to surface contextually relevant memories, even ones not directly matched by the query.
+**Retrieval uses spreading activation.** Three signals seed the activation in parallel — semantic vector similarity, lexical BM25 full-text search, and NER-matched entity lookup — then activation spreads across the engram graph through typed edges. Lateral inhibition sharpens results. A "feeling of knowing" gate returns empty rather than confabulating when memory confidence is too low.
 
----
+**Consolidation is automatic.** A background pipeline runs every 15 minutes: Claude (or Ollama) infers semantic relationships between recent episodes using a sliding window, clusters them, and summarizes each cluster into an engram. Engrams link back to their source episodes and extracted entities, building a traversable memory graph without any manual curation.
+
+**Multi-level compression.** Every engram has five pre-computed pyramid summaries (4, 8, 16, 32, 64 words). Callers request the compression level that fits their token budget.
 
 ## Quickstart
 
 ### Prerequisites
 
 - Go 1.24+
-- [Ollama](https://ollama.ai) (for embeddings and optional NER)
-- One of the following for consolidation:
-  - An Anthropic API key (direct API), **or**
-  - [Claude Code](https://claude.ai/code) CLI installed (`claude` on PATH) — lets you use your existing Claude subscription without a separate API key, **or**
-  - Ollama as a fully local LLM alternative
+- [Ollama](https://ollama.ai) with `nomic-embed-text` pulled (for embeddings)
+- One of: Anthropic API key · [Claude Code](https://claude.ai/code) CLI installed · Ollama (for consolidation)
 
 ### Install
 
@@ -43,9 +57,8 @@ cd engram
 go build -o engram ./cmd/engram
 ```
 
-### Configure
+### Configure and run
 
-**Option A: Anthropic API key**
 ```yaml
 # engram.yaml
 server:
@@ -56,16 +69,15 @@ storage:
   path: "./engram.db"
 
 llm:
-  provider: "anthropic"
+  provider: "anthropic"   # or "claude-code" or "ollama"
   model: "claude-sonnet-4-6"
-  # api_key: "sk-ant-..."     # or set ANTHROPIC_API_KEY
 
 embedding:
   base_url: "http://localhost:11434"
   model: "nomic-embed-text"
 
 ner:
-  provider: "spacy"           # or "ollama"
+  provider: "spacy"
   spacy_url: "http://localhost:8001"
 
 consolidation:
@@ -77,382 +89,38 @@ consolidation:
 ANTHROPIC_API_KEY=sk-ant-... ./engram --config engram.yaml
 ```
 
-**Option B: Claude Code (subscription, no separate API key)**
+**No Anthropic API key?** Set `llm.provider: "claude-code"` to use an existing [Claude Code](https://claude.ai/code) subscription, or `llm.provider: "ollama"` for a fully local setup. See [Configuration](docs/configuration.md) for all options.
 
-Requires [Claude Code](https://claude.ai/code) installed and logged in (`claude` on PATH).
+**No spaCy sidecar?** Set `ner.provider: "ollama"` for model-based NER, or omit the `ner` block to skip entity extraction entirely (retrieval still works via semantic + lexical seeding).
 
-```yaml
-# engram.yaml
-llm:
-  provider: "claude-code"
-  model: "claude-sonnet-4-6"  # optional; omit to use Claude's default
-  # binary_path: "/usr/local/bin/claude"  # optional; defaults to "claude"
-```
+### Use it
 
 ```bash
-./engram --config engram.yaml
+# Ingest an observation
+curl -X POST http://localhost:8080/v1/episodes \
+  -H "Authorization: Bearer your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Alice mentioned she prefers morning standups.", "source": "slack", "author": "alice"}'
+
+# Query memory (spreading activation retrieval)
+curl "http://localhost:8080/v1/engrams?query=Alice+meeting+preferences" \
+  -H "Authorization: Bearer your-secret-key"
+
+# Trigger consolidation manually
+curl -X POST http://localhost:8080/v1/consolidate \
+  -H "Authorization: Bearer your-secret-key"
 ```
 
-**Option C: Fully local (Ollama)**
-```yaml
-llm:
-  provider: "ollama"
-  model: "qwen2.5:7b"
-  base_url: "http://localhost:11434"
-```
+## MCP
 
-Engram starts an HTTP server on port 8080 and runs background consolidation every 15 minutes.
-
----
-
-## Configuration Reference
-
-### `server`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `port` | `8080` | HTTP server port |
-| `api_key` | _(none)_ | Bearer token required for all `/v1/*` requests |
-
-### `storage`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `path` | `./engram.db` | SQLite database file path |
-
-### `llm`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `provider` | `anthropic` | LLM provider: `anthropic`, `ollama`, or `claude-code` |
-| `model` | `claude-sonnet-4-6` | Model name |
-| `api_key` | _(from env)_ | Anthropic API key (if provider=anthropic) |
-| `base_url` | _(none)_ | Ollama base URL (if provider=ollama) |
-| `binary_path` | `claude` | Path to Claude Code CLI binary (if provider=claude-code) |
-
-**`claude-code` provider:** Uses your existing Claude subscription via the `claude` CLI. No API key required — just install [Claude Code](https://claude.ai/code) and log in. The CLI must be on `PATH` (or specify `binary_path`).
-
-### `embedding`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `base_url` | `http://localhost:11434` | Ollama-compatible embedding server URL |
-| `model` | `nomic-embed-text` | Embedding model name |
-| `api_key` | _(none)_ | API key if required by embedding server |
-
-Embeddings are optional — if unavailable, Engram falls back to lexical-only retrieval.
-
-### `ner`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `provider` | `ollama` | NER provider: `spacy` or `ollama` |
-| `model` | `qwen2.5:7b` | Model name (Ollama only) |
-| `spacy_url` | _(none)_ | spaCy server URL (if provider=spacy) |
-
-NER is optional — entities won't be extracted if not configured.
-
-### `consolidation`
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `enabled` | `true` | Whether to run background consolidation |
-| `interval` | `15m` | How often to consolidate (Go duration string) |
-
-### `identity`
-
-Configures the bot's identity for role-aware memory consolidation. When set, the consolidation pipeline labels each episode fragment by role (bot, owner, or third party) and generates memories with correct attribution and voice.
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `name` | _(none)_ | Bot's display name, e.g. `"Bud"`. Used to identify the bot's own episodes. |
-| `author_id` | _(none)_ | Bot's author ID — matches `episode.author_id` set by callers. |
-| `owner_ids` | _(none)_ | Optional list of owner `author_id` values for owner-specific framing. |
-
-When `identity` is configured:
-- Episodes from the bot (`author_id` matches `identity.author_id`) are written in first person ("I should...")
-- Episodes from owners (`author_id` in `identity.owner_ids`) are attributed to "the owner" or their name
-- `POST /v1/thoughts` automatically sets `author` and `author_id` from `identity.name` / `identity.author_id`
-- One-time approvals ("ok you can restart") are anchored in time rather than treated as standing permissions
-
-```yaml
-identity:
-  name: "Bud"
-  author_id: "bud"
-  owner_ids:        # optional
-    - "thunder"
-```
-
-### Environment Variables
-
-All config fields can be overridden with `ENGRAM_*` env vars:
-
-| Variable | Config field |
-|----------|-------------|
-| `ENGRAM_SERVER_API_KEY` | `server.api_key` |
-| `ENGRAM_STORAGE_PATH` | `storage.path` |
-| `ENGRAM_LLM_PROVIDER` | `llm.provider` |
-| `ENGRAM_LLM_MODEL` | `llm.model` |
-| `ENGRAM_LLM_API_KEY` | `llm.api_key` |
-| `ANTHROPIC_API_KEY` | `llm.api_key` (fallback) |
-| `ENGRAM_LLM_BASE_URL` | `llm.base_url` |
-| `ENGRAM_LLM_BINARY_PATH` | `llm.binary_path` (claude-code path) |
-| `ENGRAM_EMBEDDING_BASE_URL` | `embedding.base_url` |
-| `ENGRAM_EMBEDDING_MODEL` | `embedding.model` |
-| `ENGRAM_EMBEDDING_API_KEY` | `embedding.api_key` |
-| `ENGRAM_NER_PROVIDER` | `ner.provider` |
-| `ENGRAM_NER_MODEL` | `ner.model` |
-| `ENGRAM_NER_SPACY_URL` | `ner.spacy_url` |
-| `ENGRAM_IDENTITY_NAME` | `identity.name` |
-| `ENGRAM_IDENTITY_AUTHOR_ID` | `identity.author_id` |
-
----
-
-## REST API
-
-All `/v1/*` endpoints require `Authorization: Bearer <api_key>`. The `/health` endpoint is public.
-
-A full OpenAPI 3.0 specification is available at [`openapi.yaml`](openapi.yaml).
-
-### Health
-
-```
-GET /health
-```
-
-Response:
-```json
-{"status": "ok", "time": "2026-02-21T07:00:00Z"}
-```
-
-### Ingest
-
-#### `POST /v1/episodes`
-
-Ingest a raw episode (message, event, observation).
-
-Request:
-```json
-{
-  "content": "Alice mentioned she prefers morning meetings.",
-  "source": "discord",
-  "author": "alice",
-  "author_id": "u123",
-  "channel": "general",
-  "timestamp_event": "2026-02-21T09:00:00Z",
-  "reply_to": "ep-abc123",
-  "embedding": []
-}
-```
-
-`author`, `author_id`, `channel`, `timestamp_event`, `reply_to`, and `embedding` are optional. If `embedding` is omitted and an embedding server is configured, it is computed automatically. Named entities are extracted in the background if NER is configured.
-
-Response `201`:
-```json
-{"id": "a3f2b9c1d4e7f0a2b5c8d1e4f7a0b3c6"}
-```
-
-#### `POST /v1/thoughts`
-
-Shorthand for ingesting a free-form thought with `source: "thought"`.
-
-Request:
-```json
-{"content": "Need to follow up with Bob about the project deadline."}
-```
-
-Response `201`:
-```json
-{"id": "b5c8d1e4f7a0b3c6a9f2b9c1d4e7f0a2"}
-```
-
-### Consolidation
-
-#### `POST /v1/consolidate`
-
-Trigger the consolidation pipeline manually. Clusters recent episodes by semantic similarity, generates summaries via LLM, and promotes them to engrams.
-
-Response `200`:
-```json
-{"engrams_created": 3, "duration_ms": 1240}
-```
-
-Returns `503` if consolidation is not configured.
-
-### Response verbosity
-
-All read endpoints return **minimal responses by default** — just the fields needed to identify and display each object:
-
-| Type | Default fields |
-|------|---------------|
-| Engram | `id`, `summary` |
-| Episode | `id`, `content` |
-| Entity | `id`, `name` |
-
-Add `?detail=full` to any endpoint to get all fields. Embedding vectors are never returned.
-
-### Engrams
-
-#### `GET /v1/engrams`
-
-List consolidated engrams. Returns `[{id, summary}]` by default.
-
-Query params:
-- `query` — semantic search (spreading activation); returns ranked results
-- `detail=full` — return all fields
-- `level` — pyramid summary compression applied to every returned engram (same semantics as the single-item endpoint; default 0 = verbatim)
-- `limit` — max results when using `?query=` (default 10)
-- `threshold` — filter by minimum activation level (list-all mode)
-
-#### `GET /v1/engrams/{id}?level=0`
-
-Get an engram by full ID or 5-char short ID. Returns `{id, summary}` by default.
-
-Query param `level` controls pyramid summary compression:
-- `0` — verbatim content (default)
-- `4` — ~4-word summary
-- `8` — ~8-word summary
-- `16` — ~16-word summary
-- `32` — ~32-word summary
-- `64` — ~64-word summary
-
-Any positive integer is accepted; the nearest available level is returned.
-
-Add `?detail=full` to include all fields alongside the (possibly compressed) summary.
-
-#### `GET /v1/engrams/{id}/context`
-
-Get an engram with its source episodes and linked entities. All nested objects use the same minimal/full verbosity as the parent request.
-
-Response:
-```json
-{
-  "engram": {"id": "...", "summary": "..."},
-  "source_episodes": [{"id": "...", "content": "..."}],
-  "linked_entities": [{"id": "person:alice", "name": "Alice"}]
-}
-```
-
-#### `POST /v1/engrams/{id}/reinforce`
-
-Boost an engram's activation (simulates memory reconsolidation).
-
-Request (all optional):
-```json
-{"embedding": [...], "alpha": 0.3}
-```
-
-`alpha` defaults to `0.3`. Higher values = stronger reinforcement.
-
-### Episodes
-
-#### `GET /v1/episodes`
-
-List episodes. Returns `[{id, content}]` by default.
-
-Query params:
-- `query` — text substring search over episode content
-- `detail=full` — return all fields
-- `limit` — max results (default 100 for list-all, 10 when using `?query=`)
-
-#### `GET /v1/episodes/{id}`
-
-Get an episode by full ID or 5-char short ID. Returns `{id, content}` by default.
-
-Add `?detail=full` to include all fields.
-
-### Entities
-
-#### `GET /v1/entities`
-
-List extracted named entities. Returns `[{id, name}]` by default.
-
-Query params:
-- `query` — text search over entity names and aliases
-- `detail=full` — return all fields
-- `level` — pyramid summary compression applied to every returned entity (same semantics as the single-item endpoint; default 0 = verbatim)
-- `type` — filter by entity type (see entity types below)
-- `limit` — max results (default 100; default 10 when using `?query=`)
-
-#### `GET /v1/entities/{id}?level=0`
-
-Get an entity by its canonical ID (e.g. `person:alice`). Returns `{id, name}` by default.
-
-Query param `level` controls pyramid summary compression (same semantics as engrams):
-- `0` — raw entity record (default)
-- `4` / `8` / `16` / `32` / `64` — approx N-word summary assembled from the entity's metadata and known relations
-
-Add `?detail=full` to include all fields alongside the (possibly compressed) summary.
-
-**Entity types** (OntoNotes + extensions):
-
-| Type | Description |
-|------|-------------|
-| `PERSON` | People, including fictional |
-| `ORG` | Organizations |
-| `GPE` | Geopolitical entities (countries, cities, states) |
-| `LOC` | Non-GPE locations |
-| `FAC` | Facilities (buildings, airports) |
-| `PRODUCT` | Products (vehicles, food, etc.) |
-| `EVENT` | Named events |
-| `WORK_OF_ART` | Titles of books, songs, etc. |
-| `TECHNOLOGY` | Software, frameworks, AI models _(custom)_ |
-| `EMAIL` | Email addresses _(custom)_ |
-| `PET` | Pet names _(custom)_ |
-| `DATE`, `TIME`, `MONEY`, `PERCENT`, `QUANTITY`, `CARDINAL`, `ORDINAL` | Numeric/temporal |
-| `OTHER` | Unclassified |
-
-### Activation
-
-#### `POST /v1/activation/decay`
-
-Apply exponential decay to all engram activations. Run periodically to implement forgetting.
-
-Request (all optional):
-```json
-{"lambda": 0.01, "floor": 0.05}
-```
-
-Response:
-```json
-{"updated": 47}
-```
-
-### Management
-
-#### `POST /v1/memory/flush`
-
-Trigger consolidation and cleanup. Equivalent to `POST /v1/consolidate`.
-
-#### `DELETE /v1/memory/reset`
-
-**Destructive.** Clears all episodes, entities, engrams, and edges. Cannot be undone.
-
----
-
-## MCP Server
-
-Engram can run as a native [MCP](https://modelcontextprotocol.io) server alongside the REST server, exposing memory tools to Claude agents.
+Engram can serve as an MCP server alongside the REST API, giving Claude agents direct memory access.
 
 ```bash
-ENGRAM_MCP=1 ANTHROPIC_API_KEY=sk-ant-... ./engram --config engram.yaml
+ENGRAM_MCP=1 ./engram --config engram.yaml
 ```
 
-When `ENGRAM_MCP=1`, Engram serves MCP over stdio (for Claude Desktop / claude-code) while the REST server continues to run on the configured port.
+Add to `claude_desktop_config.json` or `.mcp.json`:
 
-### MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `search_memory` | Semantic search over engrams and episodes |
-| `list_engrams` | List all consolidated memory engrams |
-| `get_engram` | Get an engram by ID with configurable compression level |
-| `get_engram_context` | Get an engram plus its source episodes and linked entities |
-| `query_episode` | Get a raw episode by ID |
-
-### Claude Desktop configuration
-
-Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
@@ -468,71 +136,34 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
----
+MCP tools: `search_memory`, `list_engrams`, `get_engram`, `get_engram_context`, `query_episode`.
 
 ## Architecture
 
 ```
-┌──────────────┐      ┌─────────────────────────────────────┐
-│ Claude agent │─MCP─▶│           Engram Service             │
-│ (any bot)    │      │                                      │
-└──────────────┘      │  ┌─────────┐  ┌──────────────────┐  │
-                      │  │  REST   │  │     Graph DB     │  │
-┌──────────────┐      │  │  API    │  │  (SQLite +       │  │
-│  Bot (REST)  │─────▶│  │         │  │   sqlite-vec +   │  │
-└──────────────┘      │  │  MCP    │  │   FTS5)          │  │
-                      │  │  Server │  └──────────────────┘  │
-                      │  └────┬────┘                        │
-                      │       │    ┌────────────────────┐   │
-                      │  ┌────▼──┐ │   Consolidation    │   │
-                      │  │ NER   │ │   (Claude/Ollama)  │   │
-                      │  └───────┘ └────────────────────┘   │
-                      │  ┌──────────────────────────────┐   │
-                      │  │ Embeddings (Ollama-compat)   │   │
-                      │  └──────────────────────────────┘   │
-                      └─────────────────────────────────────┘
+┌──────────────┐      ┌──────────────────────────────────────────┐
+│ Claude agent │─MCP─▶│               Engram Service              │
+│              │      │                                           │
+└──────────────┘      │  ┌───────────┐   ┌─────────────────────┐ │
+                      │  │  REST +   │   │    SQLite graph DB   │ │
+┌──────────────┐      │  │  MCP API  │◀─▶│  sqlite-vec (KNN)   │ │
+│  Bot / agent │─────▶│  │           │   │  FTS5 (BM25)        │ │
+└──────────────┘      │  └─────┬─────┘   └─────────────────────┘ │
+                      │        │                                   │
+                      │  ┌─────▼──────────────────────────────┐  │
+                      │  │         Background pipeline         │  │
+                      │  │  NER (spaCy/Ollama) · Embeddings   │  │
+                      │  │  Consolidation (Claude/Ollama)      │  │
+                      │  └────────────────────────────────────┘  │
+                      └──────────────────────────────────────────┘
 ```
 
-### Storage
+Engram stores everything in a single SQLite file — no external database. The `sqlite-vec` extension handles vector KNN; FTS5 handles lexical search. Both are bundled extensions, not separate services.
 
-Engram uses a single SQLite file with two extensions:
-- **sqlite-vec** for vector similarity search
-- **FTS5** for full-text search
-
-No external database required.
-
-### Consolidation
-
-Background consolidation runs periodically (default: every 15 minutes):
-
-1. Fetches recent unconsolidated episodes
-2. Clusters them by semantic similarity (cosine distance threshold)
-3. Generates a summary for each cluster via LLM
-4. Creates or updates an **Engram** for each cluster
-5. Links engrams to their source episodes and involved entities
-
-Engrams have two types:
-- `knowledge` — facts, decisions, preferences (long-lived, decays slowly)
-- `operational` — meeting reminders, state syncs, deploys (short-lived, decays faster)
-
-### Spreading Activation
-
-Retrieval (`POST /v1/search`):
-
-1. Embeds the query and runs FTS5 full-text search to find seed nodes
-2. Seeds spreading activation across the graph (episodes → entities → engrams)
-3. Returns top-ranked engrams, episodes, and entities by activation score
-
-This surfaces relevant memories even when they aren't directly matched by the query text — e.g., searching for "Alice" will also surface engrams that mention Alice's team members.
-
----
-
-## Running as a Sidecar
-
-For agent deployments, run Engram as a sidecar next to the main bot process:
+## Running as a sidecar
 
 ```yaml
-# docker-compose.yml example
+# docker-compose.yml
 services:
   bot:
     image: mybot
@@ -551,10 +182,19 @@ services:
     command: ["--config", "/config/engram.yaml"]
 ```
 
----
+## Use cases
+
+- **Conversational agents** — persistent memory across sessions: preferences, decisions, relationship context
+- **Discord / Slack bots** — remember what users said and decided, surface it when relevant
+- **Long-running research agents** — accumulate findings over days; recall related prior work at query time
+- **Personal assistants** — "what did I say I needed to follow up on?" answered from actual memory
+
+## Docs
+
+- [Configuration reference](docs/configuration.md) — all config keys, environment variable overrides
+- [REST API reference](docs/api.md) — all endpoints, request/response shapes, MCP tools
+- [OpenAPI spec](openapi.yaml)
 
 ## License
 
-This Source Code Form is subject to the terms of the Mozilla Public
-License, v. 2.0. If a copy of the MPL was not distributed with this
-file, You can obtain one at https://mozilla.org/MPL/2.0/.
+Mozilla Public License 2.0. See [LICENSE](LICENSE) or https://mozilla.org/MPL/2.0/.
