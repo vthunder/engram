@@ -130,6 +130,8 @@ func (c *Consolidator) Run() (int, error) {
 		}
 		prevEpisodeIDs = currentEpisodeIDs
 
+		log.Printf("[consolidate] Batch: %d episodes to process (total engrams so far: %d)", len(episodes), totalCreated)
+
 		ctx := context.Background()
 
 		// Phase 0: Detect near-duplicate episodes using C16 summary similarity
@@ -163,6 +165,8 @@ func (c *Consolidator) Run() (int, error) {
 
 		// Deduplicate edges (same from/to/relationship)
 		episodeEdges = deduplicateEdges(episodeEdges)
+
+		log.Printf("[consolidate] Phase 1 done: %d edges (inferring clustering)", len(episodeEdges))
 
 		// Print edge summaries in verbose mode
 		if c.claude != nil && c.claude.verbose {
@@ -235,6 +239,7 @@ func (c *Consolidator) Run() (int, error) {
 		}
 
 		// Phase 3b: Create engrams from new clustered groups
+		log.Printf("[consolidate] Phase 2 done: %d groups to summarise", len(newGroups))
 		created := 0
 		for i, group := range newGroups {
 			if err := c.consolidateGroup(group, i); err != nil {
@@ -245,6 +250,7 @@ func (c *Consolidator) Run() (int, error) {
 		}
 
 		totalCreated += created
+		log.Printf("[consolidate] Phase 3 done: %d engrams created this batch (%d total)", created, totalCreated)
 
 		// Phase 3c: Link episodes to semantically related existing traces (episode_engram_edges)
 		// This captures cross-references between individual episodes and historical traces
@@ -1265,6 +1271,11 @@ func (c *Consolidator) inferEpisodeEpisodeLinks(ctx context.Context, episodes []
 	}
 
 	// Process episodes in sliding windows
+	totalWindows := (len(withSummaries)-batchSize+stepSize-1)/stepSize + 1
+	if totalWindows < 1 {
+		totalWindows = 1
+	}
+	windowNum := 0
 	var allEdges []EpisodeEdge
 	for start := 0; start < len(withSummaries); start += stepSize {
 		end := start + batchSize
@@ -1275,6 +1286,11 @@ func (c *Consolidator) inferEpisodeEpisodeLinks(ctx context.Context, episodes []
 		enrichedBatch := withSummaries[start:end]
 		if len(enrichedBatch) < 2 {
 			break // Need at least 2 episodes to infer edges
+		}
+
+		windowNum++
+		if windowNum == 1 || windowNum%10 == 0 {
+			log.Printf("[consolidate] Edge inference: window %d/%d", windowNum, totalWindows)
 		}
 
 		// Create episodesWithSummary slice for Claude
