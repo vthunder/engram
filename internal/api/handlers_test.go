@@ -254,15 +254,27 @@ func TestIngestThought_Success(t *testing.T) {
 
 // --- Query on list endpoints ---
 
-func TestListEngrams_Query_EmptyDB(t *testing.T) {
+func TestSearchEngrams_EmptyDB(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
 	defer cleanup()
 
-	resp := doRequest(t, srv, http.MethodGet, "/v1/engrams?query=anything", "")
+	resp := doRequest(t, srv, http.MethodPost, "/v1/engrams/search", `{"query":"anything"}`)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected 200 on empty DB query, got %d", resp.StatusCode)
+		t.Errorf("expected 200 on empty DB search, got %d", resp.StatusCode)
+	}
+}
+
+func TestSearchEngrams_MissingQuery(t *testing.T) {
+	_, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	resp := doRequest(t, srv, http.MethodPost, "/v1/engrams/search", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing query, got %d", resp.StatusCode)
 	}
 }
 
@@ -709,7 +721,7 @@ func TestFullCycle_IngestAndList(t *testing.T) {
 	}
 
 	// Search with keyword (no embedding available but should not error)
-	searchResp := doRequest(t, srv, http.MethodGet, "/v1/engrams?query=architecture&limit=5", "")
+	searchResp := doRequest(t, srv, http.MethodPost, "/v1/engrams/search", `{"query":"architecture","limit":5}`)
 	searchResp.Body.Close()
 
 	if searchResp.StatusCode != http.StatusOK {

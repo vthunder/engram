@@ -325,58 +325,78 @@ func (s *Services) nerEntityEngrams(queryStr string) []string {
 
 // --- Engrams ---
 
+type searchEngramsRequest struct {
+	Query  string `json:"query"`
+	Limit  int    `json:"limit,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	Level  int    `json:"level,omitempty"`
+}
+
+// handleSearchEngrams handles POST /v1/engrams/search.
+// Accepts a JSON body to support arbitrarily large query strings.
+func (s *Services) handleSearchEngrams(w http.ResponseWriter, r *http.Request) {
+	var req searchEngramsRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if req.Query == "" {
+		writeError(w, http.StatusBadRequest, "missing_field", "query is required")
+		return
+	}
+
+	full := req.Detail == "full"
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	// Run embedding and NER concurrently — both are network calls.
+	embCh := make(chan []float64, 1)
+	seedCh := make(chan []string, 1)
+
+	if s.EmbedClient != nil {
+		go func() {
+			emb, err := s.EmbedClient.Embed(req.Query)
+			if err != nil {
+				s.Logger.Warn("query embedding failed", "err", err)
+				embCh <- nil
+				return
+			}
+			embCh <- emb
+		}()
+	} else {
+		embCh <- nil
+	}
+
+	go func() { seedCh <- s.nerEntityEngrams(req.Query) }()
+
+	queryEmb := <-embCh
+	extraSeeds := <-seedCh
+
+	result, err := s.Graph.Retrieve(queryEmb, req.Query, limit, extraSeeds...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "retrieval_error", err.Error())
+		return
+	}
+	applyEngramLevels(s.Graph, result.Engrams, req.Level)
+	if full {
+		for _, e := range result.Engrams {
+			e.Embedding = nil
+		}
+		writeJSON(w, http.StatusOK, result.Engrams)
+	} else {
+		cards := make([]map[string]any, 0, len(result.Engrams))
+		for _, e := range result.Engrams {
+			cards = append(cards, engramCard(e))
+		}
+		writeJSON(w, http.StatusOK, cards)
+	}
+}
+
 func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 	full := parseDetail(r)
 	level := parseLevel(r)
-	queryStr := r.URL.Query().Get("query")
-
-	// Semantic search path
-	if queryStr != "" {
-		limit := parseLimit(r, 10)
-
-		// Run embedding and NER concurrently — both are network calls.
-		embCh := make(chan []float64, 1)
-		seedCh := make(chan []string, 1)
-
-		if s.EmbedClient != nil {
-			go func() {
-				emb, err := s.EmbedClient.Embed(queryStr)
-				if err != nil {
-					s.Logger.Warn("query embedding failed", "err", err)
-					embCh <- nil
-					return
-				}
-				embCh <- emb
-			}()
-		} else {
-			embCh <- nil
-		}
-
-		go func() { seedCh <- s.nerEntityEngrams(queryStr) }()
-
-		queryEmb := <-embCh
-		extraSeeds := <-seedCh
-
-		result, err := s.Graph.Retrieve(queryEmb, queryStr, limit, extraSeeds...)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "retrieval_error", err.Error())
-			return
-		}
-		applyEngramLevels(s.Graph, result.Engrams, level)
-		if full {
-			for _, e := range result.Engrams {
-				e.Embedding = nil
-			}
-			writeJSON(w, http.StatusOK, result.Engrams)
-		} else {
-			cards := make([]map[string]any, 0, len(result.Engrams))
-			for _, e := range result.Engrams {
-				cards = append(cards, engramCard(e))
-			}
-			writeJSON(w, http.StatusOK, cards)
-		}
-		return
-	}
 
 	// Threshold filter path
 	thresholdStr := r.URL.Query().Get("threshold")

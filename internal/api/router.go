@@ -28,6 +28,7 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 
 		// Engrams
 		r.Get("/v1/engrams", svc.handleListEngrams)
+		r.Post("/v1/engrams/search", svc.handleSearchEngrams)
 		r.Get("/v1/engrams/{id}", svc.handleGetEngram)
 		r.Delete("/v1/engrams/{id}", svc.handleDeleteEngram)
 		r.Get("/v1/engrams/{id}/context", svc.handleGetEngramContext)
