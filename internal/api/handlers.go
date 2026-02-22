@@ -628,6 +628,54 @@ func (s *Services) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleEpisodeCount returns the count of episodes matching a filter.
+// GET /v1/episodes/count?unconsolidated=true
+func (s *Services) handleEpisodeCount(w http.ResponseWriter, r *http.Request) {
+	unconsolidated := r.URL.Query().Get("unconsolidated") == "true"
+	if !unconsolidated {
+		writeError(w, http.StatusBadRequest, "invalid_request", "only ?unconsolidated=true is supported")
+		return
+	}
+	count, err := s.Graph.GetUnconsolidatedEpisodeCount()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": count})
+}
+
+type addEpisodeEdgeRequest struct {
+	ToID       string  `json:"to_id"`
+	EdgeType   string  `json:"edge_type"`
+	Confidence float64 `json:"confidence"`
+}
+
+// handleAddEpisodeEdge creates a directed edge between two episodes.
+// POST /v1/episodes/{id}/edges
+func (s *Services) handleAddEpisodeEdge(w http.ResponseWriter, r *http.Request) {
+	fromID := chi.URLParam(r, "id")
+	var req addEpisodeEdgeRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if req.ToID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "to_id is required")
+		return
+	}
+	if req.EdgeType == "" {
+		req.EdgeType = string(graph.EdgeFollows)
+	}
+	if req.Confidence <= 0 {
+		req.Confidence = 1.0
+	}
+	if err := s.Graph.AddEpisodeEdge(fromID, req.ToID, graph.EdgeType(req.EdgeType), req.Confidence); err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true})
+}
+
 // --- Entities ---
 
 func (s *Services) handleListEntities(w http.ResponseWriter, r *http.Request) {
