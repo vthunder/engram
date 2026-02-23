@@ -708,6 +708,12 @@ func (s *Services) handleGetEpisode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if level := parseLevel(r); level > 0 {
+		if summary, err2 := s.Graph.GetEpisodeSummary(ep.ID, level); err2 == nil && summary != nil {
+			ep.Content = summary.Summary
+		}
+	}
+
 	if parseDetail(r) {
 		ep.Embedding = nil
 		writeJSON(w, http.StatusOK, ep)

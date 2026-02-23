@@ -15,7 +15,7 @@ A full OpenAPI 3.0 specification is at [`openapi.yaml`](../openapi.yaml).
 | `GET` | `/v1/episodes` | List episodes; `?channel=`, `?unconsolidated=`, `?before={id}`, `?level=N` |
 | `POST` | `/v1/episodes/search` | Text search over episode content |
 | `GET` | `/v1/episodes/count` | Episode count; `?channel=`, `?unconsolidated=` filters |
-| `GET` | `/v1/episodes/{id}` | Get episode by ID or 5-char prefix |
+| `GET` | `/v1/episodes/{id}` | Get episode by ID or 5-char prefix; `?level=N`, `?detail=full` |
 | `POST` | `/v1/episodes/summaries` | Batch fetch pyramid summaries for episode IDs |
 | `POST` | `/v1/episodes/{id}/edges` | Add a typed edge between two episodes |
 | `POST` | `/v1/thoughts` | Ingest a free-form thought (shorthand for episodes) |
@@ -155,7 +155,9 @@ Request:
 
 Get an episode by full ID or 5-char short ID (e.g. `a3f2b`). Returns `{id, content}` by default.
 
-Add `?detail=full` to include all fields.
+Query params:
+- `level=N` — apply pyramid compression to the `content` field before returning. Same levels as the list endpoint: `4`, `8`, `16`, `32`, `64`. Episodes without a pre-generated summary at the requested level return raw content.
+- `detail=full` — return all fields (applies after `?level=N` compression)
 
 #### `GET /v1/episodes/count`
 

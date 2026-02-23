@@ -1056,6 +1056,9 @@ paths:
         Retrieve a single episode by its full ID or 5-character short ID.
 
         **Default response** is minimal: `{id, content}`.
+        Set `level=N` to replace `content` with an approximately N-word pyramid summary
+        (valid generation targets: 4, 8, 16, 32, 64; episodes with no pre-generated
+        summary at the requested level return raw content).
         Add `?detail=full` for all fields (embeddings are never returned).
       operationId: getEpisode
       tags:
@@ -1067,6 +1070,17 @@ paths:
           schema:
             type: string
           description: Full episode ID or 5-char short ID
+        - name: level
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+          description: |
+            Apply pyramid compression to the `content` field before returning.
+            Valid targets: 4, 8, 16, 32, 64 (approx word count).
+            Episodes with no pre-generated summary at the requested level return raw content.
+            0 = verbatim (default).
         - name: detail
           in: query
           schema:
