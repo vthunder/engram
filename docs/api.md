@@ -111,7 +111,7 @@ Add a typed edge between two episodes.
 Request:
 ```json
 {
-  "target_id": "b5c8d1e4f7a0b3c6",
+  "to_id": "b5c8d1e4f7a0b3c6",
   "edge_type": "REPLIES_TO",
   "confidence": 0.9
 }
@@ -263,10 +263,7 @@ Add `?detail=full` to include all fields alongside the (possibly compressed) sum
 
 Delete an engram by full ID or 5-char short ID.
 
-Response `200`:
-```json
-{"deleted": true}
-```
+Response `204`: No content.
 
 #### `GET /v1/engrams/{id}/context`
 
@@ -298,8 +295,12 @@ Batch boost activations for multiple engrams.
 
 Request:
 ```json
-{"ids": ["a3f2b9c1", "b5c8d1e4"], "boost": 0.1}
+{"engram_ids": ["a3f2b9c1", "b5c8d1e4"], "boost": 0.1, "threshold": 0.0}
 ```
+
+- `engram_ids` — required; list of engram IDs to boost
+- `boost` — additive activation increase (default `0.1`)
+- `threshold` — optional; only boost engrams above this activation level
 
 ---
 
