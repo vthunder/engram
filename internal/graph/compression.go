@@ -221,13 +221,15 @@ func buildCompressionPrompt(author string, content string, targetWords int) stri
 	sb.WriteString("- CRITICAL: You MUST write ONLY in English - NO Chinese characters allowed\n")
 	sb.WriteString("- If you write ANY Chinese characters (像这样的字符), the output will be REJECTED\n")
 	sb.WriteString("- Use ONLY English words from A-Z - absolutely NO non-English characters\n")
+	sb.WriteString("- Do NOT include word count, parenthetical annotations like (N words), or any meta-commentary\n")
+	sb.WriteString("- Output ONLY the compressed text - nothing else\n")
 
 	sb.WriteString("\nMessage context:\n")
 	sb.WriteString(fmt.Sprintf("- Author: %s (DO NOT include in output)\n", author))
 
 	sb.WriteString("\nOriginal message:\n")
 	sb.WriteString(content)
-	sb.WriteString(fmt.Sprintf("\n\nCompressed version (%d words max):", targetWords))
+	sb.WriteString("\n\nCompressed version:")
 
 	return sb.String()
 }
@@ -711,10 +713,12 @@ Rules:
 - CRITICAL: You MUST write ONLY in English - NO Chinese characters allowed
 - If you write ANY Chinese characters (像这样的字符), the output will be REJECTED
 - Use ONLY English words from A-Z - absolutely NO non-English characters
+- Do NOT include word count, parenthetical annotations like (N words), or any meta-commentary
+- Output ONLY the compressed text - nothing else
 
 Source conversation:
 %s
 
-Compressed summary (ONLY English):`, targetWords, targetWords, content)
+Compressed summary:`, targetWords, targetWords, content)
 	return prompt
 }
