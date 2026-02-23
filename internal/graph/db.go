@@ -970,6 +970,26 @@ func (g *DB) runMigrations() error {
 		log.Println("[graph] Migration to v23 completed: episode_edges.inferred_by_llm")
 	}
 
+	// Migration v24: Add event_time to engrams — the MAX(timestamp_event) of source episodes,
+	// representing when the underlying events occurred (not when consolidation ran).
+	if version < 24 {
+		g.db.Exec(`ALTER TABLE engrams ADD COLUMN event_time DATETIME`)
+		// Backfill from source episodes where available.
+		g.db.Exec(`
+			UPDATE engrams
+			SET event_time = (
+				SELECT MAX(e.timestamp_event)
+				FROM episodes e
+				JOIN engram_episodes ee ON ee.episode_id = e.id
+				WHERE ee.engram_id = engrams.id
+			)
+		`)
+		// Fall back to created_at for any engrams without source links.
+		g.db.Exec(`UPDATE engrams SET event_time = created_at WHERE event_time IS NULL`)
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (24)")
+		log.Println("[graph] Migration to v24 completed: engrams.event_time")
+	}
+
 	return nil
 }
 

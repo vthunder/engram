@@ -38,18 +38,19 @@ func (g *DB) AddEngram(en *Engram) error {
 
 	_, err = g.db.Exec(`
 		INSERT INTO engrams (id, topic, engram_type, activation, strength,
-			embedding, created_at, last_accessed, labile_until)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			embedding, event_time, created_at, last_accessed, labile_until)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			engram_type = excluded.engram_type,
 			activation = excluded.activation,
 			strength = excluded.strength,
 			embedding = excluded.embedding,
+			event_time = excluded.event_time,
 			last_accessed = excluded.last_accessed,
 			labile_until = excluded.labile_until
 	`,
 		en.ID, en.Topic, string(engramType), en.Activation, en.Strength,
-		embeddingBytes, en.CreatedAt, en.LastAccessed, nullableTime(en.LabileUntil),
+		embeddingBytes, en.EventTime, en.CreatedAt, en.LastAccessed, nullableTime(en.LabileUntil),
 	)
 
 	if err != nil {
@@ -90,7 +91,7 @@ func (g *DB) GetEngram(id string) (*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
 		FROM engrams e
 		WHERE e.id = ?
 	`, id)
@@ -112,7 +113,7 @@ func (g *DB) GetActivatedEngrams(threshold float64, limit int) ([]*Engram, error
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
 		FROM engrams e
 		WHERE e.activation >= ?
 		ORDER BY e.activation DESC
@@ -158,7 +159,7 @@ func (g *DB) GetEngramsBatch(ids []string) (map[string]*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
 		FROM engrams e
 		WHERE e.id IN (`+string(placeholders)+`)
 	`, args...)
@@ -207,7 +208,7 @@ func (g *DB) GetEngramsBatchAtLevel(ids []string, level int) (map[string]*Engram
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
 		FROM engrams e
 		WHERE e.id IN (`+string(placeholders)+`)
 	`, args...)
@@ -239,7 +240,7 @@ func (g *DB) GetActivatedEngramsWithLevel(threshold float64, limit, level int) (
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
 		FROM engrams e
 		WHERE e.activation >= ?
 		ORDER BY e.activation DESC
@@ -706,7 +707,7 @@ func (g *DB) GetAllEngrams() ([]*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
 		FROM engrams e
 		ORDER BY e.created_at DESC
 	`)
@@ -754,11 +755,12 @@ func scanEngram(row *sql.Row) (*Engram, error) {
 	var summary sql.NullString
 	var topic sql.NullString
 	var engramType sql.NullString
+	var eventTime sql.NullTime
 	var labileUntil sql.NullTime
 
 	err := row.Scan(
 		&en.ID, &summary, &topic, &engramType, &en.Activation, &en.Strength,
-		&embeddingBytes, &en.CreatedAt, &en.LastAccessed, &labileUntil,
+		&embeddingBytes, &eventTime, &en.CreatedAt, &en.LastAccessed, &labileUntil,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -772,6 +774,9 @@ func scanEngram(row *sql.Row) (*Engram, error) {
 	en.EngramType = EngramType(engramType.String)
 	if en.EngramType == "" {
 		en.EngramType = EngramTypeKnowledge
+	}
+	if eventTime.Valid {
+		en.EventTime = eventTime.Time
 	}
 	if labileUntil.Valid {
 		en.LabileUntil = labileUntil.Time
@@ -793,11 +798,12 @@ func scanEngramRows(rows *sql.Rows) ([]*Engram, error) {
 		var summary sql.NullString
 		var topic sql.NullString
 		var engramType sql.NullString
+		var eventTime sql.NullTime
 		var labileUntil sql.NullTime
 
 		err := rows.Scan(
 			&en.ID, &summary, &topic, &engramType, &en.Activation, &en.Strength,
-			&embeddingBytes, &en.CreatedAt, &en.LastAccessed, &labileUntil,
+			&embeddingBytes, &eventTime, &en.CreatedAt, &en.LastAccessed, &labileUntil,
 		)
 		if err != nil {
 			continue
@@ -808,6 +814,9 @@ func scanEngramRows(rows *sql.Rows) ([]*Engram, error) {
 		en.EngramType = EngramType(engramType.String)
 		if en.EngramType == "" {
 			en.EngramType = EngramTypeKnowledge
+		}
+		if eventTime.Valid {
+			en.EventTime = eventTime.Time
 		}
 		if labileUntil.Valid {
 			en.LabileUntil = labileUntil.Time
@@ -872,8 +881,9 @@ func (g *DB) UpdateEngramLabileUntil(engramID string, labileUntil time.Time) err
 	return err
 }
 
-// UpdateEngram updates an engram's summary, embedding, type, and strength after reconsolidation
-func (g *DB) UpdateEngram(engramID, summary string, embedding []float64, engramType EngramType, strength int) error {
+// UpdateEngram updates an engram's summary, embedding, type, strength, and event_time after reconsolidation.
+// eventTime should be MAX(timestamp_event) of all current source episodes.
+func (g *DB) UpdateEngram(engramID, summary string, embedding []float64, engramType EngramType, strength int, eventTime time.Time) error {
 	embeddingJSON, err := json.Marshal(embedding)
 	if err != nil {
 		return fmt.Errorf("failed to marshal embedding: %w", err)
@@ -881,9 +891,9 @@ func (g *DB) UpdateEngram(engramID, summary string, embedding []float64, engramT
 
 	_, err = g.db.Exec(`
 		UPDATE engrams
-		SET summary = ?, embedding = ?, engram_type = ?, strength = ?, last_accessed = CURRENT_TIMESTAMP
+		SET summary = ?, embedding = ?, engram_type = ?, strength = ?, event_time = ?, last_accessed = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, summary, embeddingJSON, engramType, strength, engramID)
+	`, summary, embeddingJSON, engramType, strength, eventTime, engramID)
 	if err != nil {
 		return err
 	}

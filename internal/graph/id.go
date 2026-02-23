@@ -30,8 +30,11 @@ func GenerateEngramID(content string, createdAtNs int64) string {
 }
 
 // ResolveID resolves a full or prefix ID against the given table.
-// Returns the full 32-char ID or an error.
+// Prefix must be at least 5 characters. Returns the full 32-char ID or an error.
 func ResolveID(db *sql.DB, table, prefix string) (string, error) {
+	if len(prefix) < 5 {
+		return "", fmt.Errorf("prefix too short: %q (minimum 5 chars)", prefix)
+	}
 	if len(prefix) == 32 {
 		var id string
 		err := db.QueryRow("SELECT id FROM "+table+" WHERE id = ?", prefix).Scan(&id)

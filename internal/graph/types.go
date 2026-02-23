@@ -136,9 +136,10 @@ type Engram struct {
 	Activation float64    `json:"activation"`
 	Strength   int        `json:"strength"`
 	Embedding  []float64  `json:"embedding,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	LastAccessed time.Time `json:"last_accessed"`
-	LabileUntil  time.Time `json:"labile_until,omitempty"`
+	EventTime    time.Time  `json:"event_time"`    // MAX(timestamp_event) of source episodes
+	CreatedAt    time.Time  `json:"created_at"`
+	LastAccessed time.Time  `json:"last_accessed"`
+	LabileUntil  time.Time  `json:"labile_until,omitempty"`
 
 	// Related data (populated on retrieval)
 	SourceIDs []string `json:"source_ids,omitempty"`

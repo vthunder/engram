@@ -476,8 +476,19 @@ func (c *Consolidator) reconsolidateEngram(engramID string) error {
 	// Reclassify trace type
 	engramType := classifyEngramType(summary, episodePtrs)
 
+	// Compute event_time as the latest timestamp_event among all current source episodes.
+	var eventTime time.Time
+	for _, ep := range sourceEpisodes {
+		if ep.TimestampEvent.After(eventTime) {
+			eventTime = ep.TimestampEvent
+		}
+	}
+	if eventTime.IsZero() {
+		eventTime = time.Now()
+	}
+
 	// Update trace
-	if err := c.graph.UpdateEngram(engramID, summary, embedding, engramType, len(sourceEpisodes)); err != nil {
+	if err := c.graph.UpdateEngram(engramID, summary, embedding, engramType, len(sourceEpisodes), eventTime); err != nil {
 		return fmt.Errorf("failed to update trace: %w", err)
 	}
 
@@ -558,6 +569,17 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 	// Classify trace type
 	engramType := classifyEngramType(summary, group.episodes)
 
+	// Compute event_time as the latest timestamp_event among source episodes.
+	var eventTime time.Time
+	for _, ep := range group.episodes {
+		if ep.TimestampEvent.After(eventTime) {
+			eventTime = ep.TimestampEvent
+		}
+	}
+	if eventTime.IsZero() {
+		eventTime = time.Now()
+	}
+
 	// Create engram
 	engram := &graph.Engram{
 		ID:         engramID,
@@ -567,6 +589,7 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 		Activation: 0.5, // Neutral starting activation (schema default), decay will lower over time
 		Strength:   len(group.episodes), // Strength based on number of source episodes
 		Embedding:  embedding,
+		EventTime:  eventTime,
 		CreatedAt:  time.Now(),
 	}
 
