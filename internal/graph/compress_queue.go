@@ -90,17 +90,18 @@ func (q *EpisodeCompressQueue) scan(ctx context.Context) {
 	if len(ids) == 0 {
 		return
 	}
-	q.logger.Info("episode compress: backfilling missing summaries", "count", len(ids))
+	// Process the batch synchronously so the log reflects completed work,
+	// not just enqueued work.
+	processed := 0
 	for _, id := range ids {
-		select {
-		case <-ctx.Done():
-			return
-		case q.queue <- id:
-		default:
-			// Queue filled up again; bail and let the next tick continue.
-			q.needsScan.Store(true)
-			return
+		if ctx.Err() != nil {
+			break
 		}
+		q.compress(id)
+		processed++
+	}
+	if processed > 0 {
+		q.logger.Info("episode compress: backfilled missing summaries", "count", processed)
 	}
 	// If we got a full batch there may be more rows waiting.
 	if len(ids) == episodeCompressScanBatch {
