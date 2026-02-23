@@ -13,7 +13,7 @@ Engram is configured via a YAML file (default: `engram.yaml`). Any field can be 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `port` | `8080` | HTTP server port |
-| `api_key` | _(none)_ | Bearer token required for all `/v1/*` requests |
+| `api_key` | _(none)_ | Bearer token required for all `/v1/*` requests. If unset, auth is disabled. |
 
 ---
 
@@ -32,7 +32,7 @@ Controls the LLM used for the consolidation pipeline.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `provider` | `anthropic` | `anthropic`, `ollama`, or `claude-code` |
-| `model` | `claude-sonnet-4-6` | Model name |
+| `model` | `claude-haiku-4-5` | Model name |
 | `api_key` | _(from env)_ | Anthropic API key (if `provider: anthropic`) |
 | `base_url` | _(none)_ | Base URL (if `provider: ollama`) |
 | `binary_path` | `claude` | Path to Claude Code CLI binary (if `provider: claude-code`) |
@@ -44,7 +44,7 @@ Controls the LLM used for the consolidation pipeline.
 ```yaml
 llm:
   provider: "anthropic"
-  model: "claude-sonnet-4-6"
+  model: "claude-haiku-4-5"
 ```
 
 **`claude-code`** — Uses your existing [Claude Code](https://claude.ai/code) subscription via the `claude` CLI. No separate API key needed. The `claude` binary must be on `PATH` (or specify `binary_path`).

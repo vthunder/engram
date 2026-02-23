@@ -46,7 +46,10 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: API key passed as Bearer token
+      description: |
+        API key passed as Bearer token. Only required when `server.api_key` is set
+        in the server config. If no key is configured, auth is disabled and all
+        `/v1/*` requests are accepted without a header.
 
   schemas:
     Episode:

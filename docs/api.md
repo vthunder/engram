@@ -2,7 +2,7 @@
 
 ## REST API
 
-All `/v1/*` endpoints require `Authorization: Bearer <api_key>`. The `/health` endpoint is public.
+If `server.api_key` is set in config, all `/v1/*` endpoints require `Authorization: Bearer <api_key>`. If no key is configured, auth is disabled and requests are accepted without a header — suitable for local or trusted-network deployments. The `/health` endpoint is always public.
 
 A full OpenAPI 3.0 specification is at [`openapi.yaml`](../openapi.yaml).
 

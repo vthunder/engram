@@ -63,14 +63,14 @@ go build -o engram ./cmd/engram
 # engram.yaml
 server:
   port: 8080
-  api_key: "your-secret-key"
+  # api_key: "your-secret-key"   # omit to disable auth (fine for local use)
 
 storage:
   path: "./engram.db"
 
 llm:
   provider: "anthropic"   # or "claude-code" or "ollama"
-  model: "claude-sonnet-4-6"
+  model: "claude-haiku-4-5"
 
 embedding:
   base_url: "http://localhost:11434"
@@ -103,19 +103,16 @@ ANTHROPIC_API_KEY=sk-ant-... ./engram --config engram.yaml
 ```bash
 # Ingest an observation
 curl -X POST http://localhost:8080/v1/episodes \
-  -H "Authorization: Bearer your-secret-key" \
   -H "Content-Type: application/json" \
   -d '{"content": "Alice mentioned she prefers morning standups.", "source": "slack", "author": "alice"}'
 
 # Query memory (spreading activation retrieval)
 curl -X POST http://localhost:8080/v1/engrams/search \
-  -H "Authorization: Bearer your-secret-key" \
   -H "Content-Type: application/json" \
   -d '{"query": "Alice meeting preferences", "limit": 10}'
 
 # Trigger consolidation manually
-curl -X POST http://localhost:8080/v1/consolidate \
-  -H "Authorization: Bearer your-secret-key"
+curl -X POST http://localhost:8080/v1/consolidate
 ```
 
 ## MCP
