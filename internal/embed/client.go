@@ -83,6 +83,16 @@ func (c *Client) SetGenerationModel(model string) {
 	c.generationModel = model
 }
 
+// EmbedModel returns the model name used for embedding generation.
+func (c *Client) EmbedModel() string {
+	return c.model
+}
+
+// BaseURL returns the base URL of the Ollama server.
+func (c *Client) BaseURL() string {
+	return c.baseURL
+}
+
 // embeddingRequest is the Ollama API request format
 type embeddingRequest struct {
 	Model  string `json:"model"`

@@ -25,45 +25,102 @@ Engram is configured via a YAML file (default: `engram.yaml`). Any field can be 
 
 ---
 
-## `llm`
+## LLM configuration
 
-Controls the LLM used for the consolidation pipeline.
+Engram uses three LLM configs for different pipeline stages, each with different quality requirements:
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `provider` | `anthropic` | `anthropic`, `ollama`, or `claude-code` |
-| `model` | `claude-haiku-4-5` | Model name |
-| `api_key` | _(from env)_ | Anthropic API key (if `provider: anthropic`) |
-| `base_url` | _(none)_ | Base URL (if `provider: ollama`) |
-| `binary_path` | `claude` | Path to Claude Code CLI binary (if `provider: claude-code`) |
+| Config key | Purpose | Recommended |
+|---|---|---|
+| `compression_llm` | Pyramid compression — squeeze episode text to N words (L4/L8/L16/L32/L64) | Small/local model (Ollama) |
+| `consolidation_llm` | Engram/trace summarization — synthesize groups of episodes into coherent memories | Medium model |
+| `inference_llm` | Relationship/edge detection — infer semantic edges between episodes (structured JSON output) | Medium–high model |
 
-### Provider options
+All three share the same set of fields:
 
-**`anthropic`** — Direct Anthropic API. Requires `ANTHROPIC_API_KEY` or `llm.api_key`.
+| Key | Description |
+|-----|-------------|
+| `provider` | `anthropic`, `ollama`, or `claude-code` |
+| `model` | Model name |
+| `api_key` | Anthropic API key (if `provider: anthropic`). Falls back to `ANTHROPIC_API_KEY` env var. |
+| `base_url` | Ollama server URL (if `provider: ollama`). Defaults to `http://localhost:11434`. |
+| `binary_path` | Path to Claude Code CLI binary (if `provider: claude-code`). Defaults to `claude`. |
+
+### Defaults
+
+| Config | Default provider | Default model |
+|--------|-----------------|---------------|
+| `compression_llm` | `ollama` | `qwen2.5:7b` |
+| `consolidation_llm` | `anthropic` | `claude-haiku-4-5-20251001` |
+| `inference_llm` | `anthropic` | `claude-haiku-4-5-20251001` |
+
+### Example: recommended mixed setup
 
 ```yaml
-llm:
+# Pyramid compression — local Ollama is fast enough for word-count compression
+compression_llm:
+  provider: "ollama"
+  model: "qwen2.5:7b"
+  base_url: "http://localhost:11434"
+
+# Engram summarization — Haiku handles coherent prose well
+consolidation_llm:
   provider: "anthropic"
-  model: "claude-haiku-4-5"
+  model: "claude-haiku-4-5-20251001"
+
+# Relationship detection — Haiku handles structured JSON output reliably
+inference_llm:
+  provider: "anthropic"
+  model: "claude-haiku-4-5-20251001"
 ```
 
-**`claude-code`** — Uses your existing [Claude Code](https://claude.ai/code) subscription via the `claude` CLI. No separate API key needed. The `claude` binary must be on `PATH` (or specify `binary_path`).
+### Example: fully local (all Ollama)
 
 ```yaml
-llm:
-  provider: "claude-code"
-  model: "claude-sonnet-4-6"   # optional; omit to use Claude's default
-  # binary_path: "/usr/local/bin/claude"
-```
+compression_llm:
+  provider: "ollama"
+  model: "qwen2.5:3b"
+  base_url: "http://localhost:11434"
 
-**`ollama`** — Fully local via Ollama. Requires `base_url`.
+consolidation_llm:
+  provider: "ollama"
+  model: "qwen2.5:7b"
+  base_url: "http://localhost:11434"
 
-```yaml
-llm:
+inference_llm:
   provider: "ollama"
   model: "qwen2.5:7b"
   base_url: "http://localhost:11434"
 ```
+
+### Example: claude-code (no API key required)
+
+```yaml
+consolidation_llm:
+  provider: "claude-code"
+  model: "claude-sonnet-4-6"   # optional
+
+inference_llm:
+  provider: "claude-code"
+  model: "claude-sonnet-4-6"
+
+compression_llm:
+  provider: "ollama"
+  model: "qwen2.5:7b"
+  base_url: "http://localhost:11434"
+```
+
+### Deprecated: `llm`
+
+> **Deprecated.** The single `llm` key is still supported as a fallback but will be removed in a future release. If `compression_llm`, `consolidation_llm`, or `inference_llm` are not set, Engram falls back to `llm` for that stage. A deprecation warning is logged at startup when `llm` is in use.
+
+```yaml
+# Old style — all three stages use the same model (still works, but deprecated)
+llm:
+  provider: "anthropic"
+  model: "claude-haiku-4-5-20251001"
+```
+
+Migrate by replacing `llm:` with the three specific keys above.
 
 ---
 
@@ -178,12 +235,27 @@ All config fields can be set or overridden with `ENGRAM_*` environment variables
 |----------|-------------|
 | `ENGRAM_SERVER_API_KEY` | `server.api_key` |
 | `ENGRAM_STORAGE_PATH` | `storage.path` |
-| `ENGRAM_LLM_PROVIDER` | `llm.provider` |
-| `ENGRAM_LLM_MODEL` | `llm.model` |
-| `ENGRAM_LLM_API_KEY` | `llm.api_key` |
-| `ANTHROPIC_API_KEY` | `llm.api_key` (fallback) |
-| `ENGRAM_LLM_BASE_URL` | `llm.base_url` |
-| `ENGRAM_LLM_BINARY_PATH` | `llm.binary_path` |
+| `ENGRAM_COMPRESSION_LLM_PROVIDER` | `compression_llm.provider` |
+| `ENGRAM_COMPRESSION_LLM_MODEL` | `compression_llm.model` |
+| `ENGRAM_COMPRESSION_LLM_API_KEY` | `compression_llm.api_key` |
+| `ENGRAM_COMPRESSION_LLM_BASE_URL` | `compression_llm.base_url` |
+| `ENGRAM_COMPRESSION_LLM_BINARY_PATH` | `compression_llm.binary_path` |
+| `ENGRAM_CONSOLIDATION_LLM_PROVIDER` | `consolidation_llm.provider` |
+| `ENGRAM_CONSOLIDATION_LLM_MODEL` | `consolidation_llm.model` |
+| `ENGRAM_CONSOLIDATION_LLM_API_KEY` | `consolidation_llm.api_key` |
+| `ENGRAM_CONSOLIDATION_LLM_BASE_URL` | `consolidation_llm.base_url` |
+| `ENGRAM_CONSOLIDATION_LLM_BINARY_PATH` | `consolidation_llm.binary_path` |
+| `ENGRAM_INFERENCE_LLM_PROVIDER` | `inference_llm.provider` |
+| `ENGRAM_INFERENCE_LLM_MODEL` | `inference_llm.model` |
+| `ENGRAM_INFERENCE_LLM_API_KEY` | `inference_llm.api_key` |
+| `ENGRAM_INFERENCE_LLM_BASE_URL` | `inference_llm.base_url` |
+| `ENGRAM_INFERENCE_LLM_BINARY_PATH` | `inference_llm.binary_path` |
+| `ANTHROPIC_API_KEY` | fallback api_key for all anthropic-using configs |
+| `ENGRAM_LLM_PROVIDER` | `llm.provider` _(deprecated)_ |
+| `ENGRAM_LLM_MODEL` | `llm.model` _(deprecated)_ |
+| `ENGRAM_LLM_API_KEY` | `llm.api_key` _(deprecated)_ |
+| `ENGRAM_LLM_BASE_URL` | `llm.base_url` _(deprecated)_ |
+| `ENGRAM_LLM_BINARY_PATH` | `llm.binary_path` _(deprecated)_ |
 | `ENGRAM_EMBEDDING_BASE_URL` | `embedding.base_url` |
 | `ENGRAM_EMBEDDING_MODEL` | `embedding.model` |
 | `ENGRAM_EMBEDDING_API_KEY` | `embedding.api_key` |

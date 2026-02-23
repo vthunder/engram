@@ -41,11 +41,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	if cfg.LLMDeprecatedUsed() {
+		logger.Warn("config: 'llm' key is deprecated; migrate to 'compression_llm', 'consolidation_llm', and 'inference_llm'")
+	}
+
+	comp := cfg.ResolvedCompressionLLM()
+	cons := cfg.ResolvedConsolidationLLM()
+	infer := cfg.ResolvedInferenceLLM()
+
 	logger.Info("engram starting",
 		"port", cfg.Server.Port,
 		"db", cfg.Storage.Path,
-		"llm", cfg.LLM.Provider,
-		"model", cfg.LLM.Model,
+		"compression_llm", comp.Provider+"/"+comp.Model,
+		"consolidation_llm", cons.Provider+"/"+cons.Model,
+		"inference_llm", infer.Provider+"/"+infer.Model,
 	)
 
 	// Open graph database
@@ -70,31 +79,14 @@ func main() {
 		logger.Info("NER client configured", "provider", "spacy", "url", cfg.NER.SpacyURL)
 	}
 
-	// Set up LLM for consolidation and episode compression
+	// Set up LLM for consolidation and episode compression.
+	// Each function uses its own resolved config: compression, consolidation, inference.
 	var consolidator *consolidate.Consolidator
 	var compressQueue *graph.EpisodeCompressQueue
 	if cfg.Consolidation.Enabled {
-		var llmClient consolidate.LLMClient
-		var claudeInfer *consolidate.ClaudeInference
-		switch cfg.LLM.Provider {
-		case "anthropic":
-			if embedClient != nil {
-				llmClient = newAnthropicLLMClient(embedClient, cfg.LLM.APIKey, cfg.LLM.Model, logger)
-			}
-			claudeInfer = consolidate.NewClaudeInference(cfg.LLM.Model, cfg.LLM.APIKey, false)
-		case "ollama":
-			if embedClient != nil {
-				llmClient = embedClient // embed.Client satisfies LLMClient (Embed + Generate + Summarize)
-			}
-			claudeInfer = consolidate.NewClaudeInference(cfg.LLM.Model, cfg.LLM.APIKey, false)
-		case "claude-code":
-			ccc := consolidate.NewClaudeCodeClient(cfg.LLM.BinaryPath, cfg.LLM.Model, false)
-			if embedClient != nil {
-				llmClient = newClaudeCodeLLMClient(embedClient, ccc)
-			}
-			claudeInfer = consolidate.NewClaudeInferenceFromGenerator(ccc, false)
-			logger.Info("LLM backend: claude-code", "binary", cfg.LLM.BinaryPath)
-		}
+		compressor := buildCompressor(comp, embedClient)
+		llmClient := buildConsolidationLLM(cons, embedClient, logger)
+		claudeInfer := buildInferenceClient(infer)
 
 		if llmClient != nil {
 			consolidator = consolidate.NewConsolidator(db, llmClient, claudeInfer)
@@ -103,7 +95,7 @@ func main() {
 			consolidator.OwnerIDs = cfg.Identity.OwnerIDs
 			logger.Info("consolidation enabled", "interval", cfg.Consolidation.Interval)
 
-			compressQueue = graph.NewEpisodeCompressQueue(db, llmClient, logger)
+			compressQueue = graph.NewEpisodeCompressQueue(db, compressor, logger)
 		} else {
 			logger.Warn("consolidation disabled: no LLM client available")
 		}
@@ -237,18 +229,42 @@ func runDecay(ctx context.Context, db *graph.DB, cfg config.DecayConfig, logger 
 	}
 }
 
-// anthropicLLMClient wraps embed.Client + Anthropic for consolidation.
-// Embedding is delegated to embed.Client; Generate/Summarize to Anthropic.
-type anthropicLLMClient struct {
-	embed    *embed.Client
-	anthropic *consolidate.AnthropicClient
+// generatorCompressor adapts a context-aware Generator (Anthropic/claude-code)
+// to the graph.Compressor interface (no context).
+type generatorCompressor struct {
+	gen consolidate.Generator
 }
 
-func newAnthropicLLMClient(embedClient *embed.Client, apiKey, model string, logger *slog.Logger) consolidate.LLMClient {
-	return &anthropicLLMClient{
-		embed:    embedClient,
-		anthropic: consolidate.NewAnthropicClient(model, apiKey, false),
+func (g *generatorCompressor) Generate(prompt string) (string, error) {
+	return g.gen.Generate(context.Background(), prompt)
+}
+
+// buildCompressor creates a graph.Compressor for pyramid compression.
+// Ollama uses embed.Client with the configured generation model.
+// Anthropic / claude-code are wrapped via generatorCompressor.
+func buildCompressor(cfg config.LLMConfig, embedClient *embed.Client) graph.Compressor {
+	switch cfg.Provider {
+	case "ollama":
+		baseURL := cfg.BaseURL
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
+		c := embed.NewClient(baseURL, "") // embedding not used by compressor
+		c.SetGenerationModel(cfg.Model)
+		return c
+	case "anthropic":
+		return &generatorCompressor{gen: consolidate.NewAnthropicClient(cfg.Model, cfg.APIKey, false)}
+	case "claude-code":
+		return &generatorCompressor{gen: consolidate.NewClaudeCodeClient(cfg.BinaryPath, cfg.Model, false)}
 	}
+	return nil
+}
+
+// anthropicLLMClient wraps embed.Client + Anthropic for consolidation.
+// Embedding is delegated to embed.Client; Generate to Anthropic.
+type anthropicLLMClient struct {
+	embed     *embed.Client
+	anthropic *consolidate.AnthropicClient
 }
 
 func (a *anthropicLLMClient) Embed(text string) ([]float64, error) {
@@ -266,14 +282,51 @@ type claudeCodeLLMClient struct {
 	cc    *consolidate.ClaudeCodeClient
 }
 
-func newClaudeCodeLLMClient(embedClient *embed.Client, cc *consolidate.ClaudeCodeClient) consolidate.LLMClient {
-	return &claudeCodeLLMClient{embed: embedClient, cc: cc}
-}
-
 func (c *claudeCodeLLMClient) Embed(text string) ([]float64, error) {
 	return c.embed.Embed(text)
 }
 
 func (c *claudeCodeLLMClient) Generate(prompt string) (string, error) {
 	return c.cc.Generate(context.Background(), prompt)
+}
+
+// buildConsolidationLLM creates a consolidate.LLMClient for engram/trace summarization.
+// Embeddings always come from embedClient (Ollama). Generation uses the resolved config.
+func buildConsolidationLLM(cfg config.LLMConfig, embedClient *embed.Client, logger *slog.Logger) consolidate.LLMClient {
+	if embedClient == nil {
+		return nil
+	}
+	switch cfg.Provider {
+	case "anthropic":
+		return &anthropicLLMClient{
+			embed:     embedClient,
+			anthropic: consolidate.NewAnthropicClient(cfg.Model, cfg.APIKey, false),
+		}
+	case "ollama":
+		// embed.Client satisfies LLMClient directly when used for both embed + generate
+		c := embed.NewClient(cfg.BaseURL, embedClient.EmbedModel())
+		c.SetGenerationModel(cfg.Model)
+		return c
+	case "claude-code":
+		logger.Info("consolidation LLM backend: claude-code", "binary", cfg.BinaryPath)
+		return &claudeCodeLLMClient{
+			embed: embedClient,
+			cc:    consolidate.NewClaudeCodeClient(cfg.BinaryPath, cfg.Model, false),
+		}
+	}
+	return nil
+}
+
+// buildInferenceClient creates a ClaudeInference for relationship/edge detection.
+func buildInferenceClient(cfg config.LLMConfig) *consolidate.ClaudeInference {
+	switch cfg.Provider {
+	case "anthropic":
+		return consolidate.NewClaudeInference(cfg.Model, cfg.APIKey, false)
+	case "ollama":
+		return consolidate.NewClaudeInference(cfg.Model, cfg.APIKey, false)
+	case "claude-code":
+		ccc := consolidate.NewClaudeCodeClient(cfg.BinaryPath, cfg.Model, false)
+		return consolidate.NewClaudeInferenceFromGenerator(ccc, false)
+	}
+	return nil
 }

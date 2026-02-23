@@ -68,9 +68,21 @@ server:
 storage:
   path: "./engram.db"
 
-llm:
-  provider: "anthropic"   # or "claude-code" or "ollama"
-  model: "claude-haiku-4-5"
+# Pyramid compression — fast local model is sufficient for word-count compression
+compression_llm:
+  provider: "ollama"
+  model: "qwen2.5:7b"
+  base_url: "http://localhost:11434"
+
+# Engram summarization — Haiku produces coherent prose reliably
+consolidation_llm:
+  provider: "anthropic"
+  model: "claude-haiku-4-5-20251001"
+
+# Relationship/edge detection — structured JSON output
+inference_llm:
+  provider: "anthropic"
+  model: "claude-haiku-4-5-20251001"
 
 embedding:
   base_url: "http://localhost:11434"
@@ -94,7 +106,7 @@ decay:
 ANTHROPIC_API_KEY=sk-ant-... ./engram --config engram.yaml
 ```
 
-**No Anthropic API key?** Set `llm.provider: "claude-code"` to use an existing [Claude Code](https://claude.ai/code) subscription, or `llm.provider: "ollama"` for a fully local setup. See [Configuration](docs/configuration.md) for all options.
+**No Anthropic API key?** Set `consolidation_llm.provider: "claude-code"` and `inference_llm.provider: "claude-code"` to use an existing [Claude Code](https://claude.ai/code) subscription, or use `"ollama"` for a fully local setup. See [Configuration](docs/configuration.md) for all options.
 
 **No spaCy sidecar?** Set `ner.provider: "ollama"` for model-based NER, or omit the `ner` block to skip entity extraction entirely (retrieval still works via semantic + lexical seeding).
 
