@@ -8,9 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `POST /v1/engrams/search` — semantic search (spreading activation) with a JSON body. Accepts `query`, `limit`, `detail`, `level`.
+- `POST /v1/episodes/search` — text search over episode content with a JSON body. Same fields as engram search.
+- `POST /v1/entities/search` — text search over entity names and aliases with a JSON body.
+
 ### Changed
 
 - **Automatic background decay.** Engram now runs activation decay on a configurable interval (default: every hour) without requiring clients to call `POST /v1/activation/decay` on a schedule. Configure via the new `decay` config block (`interval`, `lambda`, `floor`). The endpoint remains for manual/one-off use.
+- `GET /v1/engrams`, `GET /v1/episodes`, `GET /v1/entities` no longer accept a `?query=` parameter. Use the new `POST /{resource}/search` endpoints instead. GET list endpoints are now list-only with filter/cursor params.
 
 ---
 
@@ -37,7 +44,7 @@ Initial public release. Engram is a standalone episodic memory service for AI ag
 - `POST /v1/activation/decay` — apply exponential activation decay (forgetting)
 - `DELETE /v1/memory/reset` — destructive wipe of all memory
 - `GET /health` — public health check endpoint
-- `?query=` semantic search on list endpoints (engrams, episodes, entities)
+- `?query=` semantic/text search on list endpoints (engrams, episodes, entities) — moved to dedicated `POST /{resource}/search` endpoints in Unreleased
 - `?detail=full` verbosity flag — minimal responses by default (id + primary field only)
 - `?level=N` pyramid summary compression on engrams and entities (4 / 8 / 16 / 32 / 64 words)
 

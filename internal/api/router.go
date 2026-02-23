@@ -37,6 +37,7 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 
 		// Episodes
 		r.Get("/v1/episodes", svc.handleListEpisodes)
+		r.Post("/v1/episodes/search", svc.handleSearchEpisodes)
 		r.Get("/v1/episodes/count", svc.handleEpisodeCount)
 		r.Get("/v1/episodes/{id}", svc.handleGetEpisode)
 		r.Post("/v1/episodes/summaries", svc.handleBatchEpisodeSummaries)
@@ -44,6 +45,7 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 
 		// Entities
 		r.Get("/v1/entities", svc.handleListEntities)
+		r.Post("/v1/entities/search", svc.handleSearchEntities)
 		r.Get("/v1/entities/{id}", svc.handleGetEntity)
 		r.Get("/v1/entities/{id}/engrams", svc.handleGetEntityEngrams)
 

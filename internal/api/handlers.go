@@ -555,23 +555,41 @@ func (s *Services) handleGetEngramContext(w http.ResponseWriter, r *http.Request
 
 // --- Episodes ---
 
+type searchEpisodesRequest struct {
+	Query  string `json:"query"`
+	Limit  int    `json:"limit,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	Level  int    `json:"level,omitempty"`
+}
+
+// handleSearchEpisodes handles POST /v1/episodes/search.
+func (s *Services) handleSearchEpisodes(w http.ResponseWriter, r *http.Request) {
+	var req searchEpisodesRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if req.Query == "" {
+		writeError(w, http.StatusBadRequest, "missing_field", "query is required")
+		return
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	episodes, err := s.Graph.SearchEpisodesByText(req.Query, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	applyEpisodeLevels(s.Graph, episodes, req.Level)
+	writeEpisodeList(w, episodes, req.Detail == "full")
+}
+
 func (s *Services) handleListEpisodes(w http.ResponseWriter, r *http.Request) {
 	full := parseDetail(r)
 	level := parseLevel(r)
-	queryStr := r.URL.Query().Get("query")
 	limit := parseLimit(r, 50)
-
-	// Text search path (does not support before/level/unconsolidated filters)
-	if queryStr != "" {
-		episodes, err := s.Graph.SearchEpisodesByText(queryStr, limit)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-			return
-		}
-		applyEpisodeLevels(s.Graph, episodes, level)
-		writeEpisodeList(w, episodes, full)
-		return
-	}
 
 	channel := r.URL.Query().Get("channel")
 	unconsolidated := r.URL.Query().Get("unconsolidated") == "true"
@@ -730,23 +748,41 @@ func (s *Services) handleAddEpisodeEdge(w http.ResponseWriter, r *http.Request) 
 
 // --- Entities ---
 
+type searchEntitiesRequest struct {
+	Query  string `json:"query"`
+	Limit  int    `json:"limit,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	Level  int    `json:"level,omitempty"`
+}
+
+// handleSearchEntities handles POST /v1/entities/search.
+func (s *Services) handleSearchEntities(w http.ResponseWriter, r *http.Request) {
+	var req searchEntitiesRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if req.Query == "" {
+		writeError(w, http.StatusBadRequest, "missing_field", "query is required")
+		return
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	entities, err := s.Graph.FindEntitiesByText(req.Query, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	applyEntityLevels(s.Graph, entities, req.Level)
+	writeEntityList(w, entities, req.Detail == "full")
+}
+
 func (s *Services) handleListEntities(w http.ResponseWriter, r *http.Request) {
 	full := parseDetail(r)
 	level := parseLevel(r)
-	queryStr := r.URL.Query().Get("query")
 	limit := parseLimit(r, 100)
-
-	// Text search path
-	if queryStr != "" {
-		entities, err := s.Graph.FindEntitiesByText(queryStr, limit)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-			return
-		}
-		applyEntityLevels(s.Graph, entities, level)
-		writeEntityList(w, entities, full)
-		return
-	}
 
 	entityType := r.URL.Query().Get("type")
 	var entities []*graph.Entity

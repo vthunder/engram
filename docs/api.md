@@ -12,19 +12,22 @@ A full OpenAPI 3.0 specification is at [`openapi.yaml`](../openapi.yaml).
 |--------|------|-------------|
 | `GET` | `/health` | Service health check (public) |
 | `POST` | `/v1/episodes` | Ingest a raw episode |
-| `GET` | `/v1/episodes` | List episodes; `?query=`, `?channel=`, `?unconsolidated=`, `?before={id}`, `?level=N` |
+| `GET` | `/v1/episodes` | List episodes; `?channel=`, `?unconsolidated=`, `?before={id}`, `?level=N` |
+| `POST` | `/v1/episodes/search` | Text search over episode content |
 | `GET` | `/v1/episodes/count` | Episode count; `?channel=`, `?unconsolidated=` filters |
 | `GET` | `/v1/episodes/{id}` | Get episode by ID or 5-char prefix |
 | `POST` | `/v1/episodes/summaries` | Batch fetch pyramid summaries for episode IDs |
 | `POST` | `/v1/episodes/{id}/edges` | Add a typed edge between two episodes |
 | `POST` | `/v1/thoughts` | Ingest a free-form thought (shorthand for episodes) |
-| `GET` | `/v1/engrams` | List engrams; `?query=` triggers spreading activation |
+| `GET` | `/v1/engrams` | List engrams; `?threshold=` filter |
+| `POST` | `/v1/engrams/search` | Semantic search via spreading activation |
 | `GET` | `/v1/engrams/{id}` | Get engram by ID; `?level=N` for pyramid compression |
 | `DELETE` | `/v1/engrams/{id}` | Delete an engram |
 | `GET` | `/v1/engrams/{id}/context` | Engram + source episodes + linked entities |
 | `POST` | `/v1/engrams/{id}/reinforce` | Boost activation and optionally blend embedding |
 | `POST` | `/v1/engrams/boost` | Batch activation boost |
-| `GET` | `/v1/entities` | List entities; `?query=`, `?type=` filters |
+| `GET` | `/v1/entities` | List entities; `?type=` filter |
+| `POST` | `/v1/entities/search` | Text search over entity names and aliases |
 | `GET` | `/v1/entities/{id}` | Get entity by canonical ID |
 | `GET` | `/v1/entities/{id}/engrams` | All engrams linked to an entity |
 | `POST` | `/v1/consolidate` | Trigger consolidation pipeline manually |
@@ -125,7 +128,6 @@ Edge types: `REPLIES_TO`, `FOLLOWS`, `RELATED_TO`.
 List episodes. Returns `[{id, content}]` by default.
 
 Query params:
-- `query` — substring search over episode content (does not combine with other filters)
 - `channel` — filter by channel value
 - `unconsolidated=true` — only return episodes not yet part of any engram
 - `before={id}` — return only episodes older than the given episode ID (full or 5-char prefix); used for cursor-based pagination. Returns `400` if the ID is not found.
@@ -133,7 +135,21 @@ Query params:
 - `detail=full` — return all fields (applies after `?level=N` compression)
 - `limit` — max results (default 50)
 
-All filters except `query` compose: `?channel=X&unconsolidated=true&before={id}&level=8` is a valid combination.
+All filters compose freely: `?channel=X&unconsolidated=true&before={id}&level=8` is a valid combination.
+
+#### `POST /v1/episodes/search`
+
+Text search over episode content. Returns `[{id, content}]` by default.
+
+Request:
+```json
+{"query": "morning standup", "limit": 10, "detail": "full", "level": 8}
+```
+
+- `query` — required; substring search over episode content
+- `limit` — max results (default 10)
+- `detail` — set to `"full"` for all fields
+- `level` — pyramid compression level applied to returned content
 
 #### `GET /v1/episodes/{id}`
 
@@ -195,7 +211,7 @@ GET /v1/episodes?channel=guild:general&limit=70&before={ep30_id}&unconsolidated=
 GET /v1/episodes/count?channel=guild:general&unconsolidated=true
 ```
 
-The third query returns an empty list once all older episodes have been consolidated — they are then reachable via `GET /v1/engrams?query=...` (spreading activation search). Setting `consolidation.max_buffer` to match the bot's fetch limit (e.g. `100`) ensures episodes are always accessible via one path or the other.
+The third query returns an empty list once all older episodes have been consolidated — they are then reachable via `POST /v1/engrams/search` (spreading activation search). Setting `consolidation.max_buffer` to match the bot's fetch limit (e.g. `100`) ensures episodes are always accessible via one path or the other.
 
 ---
 
@@ -206,11 +222,23 @@ The third query returns an empty list once all older episodes have been consolid
 List consolidated engrams. Returns `[{id, summary}]` by default.
 
 Query params:
-- `query` — semantic search via spreading activation; returns ranked results
 - `detail=full` — return all fields
 - `level` — pyramid compression level applied to every returned engram (default `0` = verbatim)
-- `limit` — max results when using `?query=` (default 10)
-- `threshold` — filter by minimum activation level (list-all mode only)
+- `threshold` — filter by minimum activation level
+
+#### `POST /v1/engrams/search`
+
+Semantic search via spreading activation. Returns ranked engrams matching the query.
+
+Request:
+```json
+{"query": "Alice meeting preferences", "limit": 10, "detail": "full", "level": 0}
+```
+
+- `query` — required; natural language search. Seeds spreading activation via semantic KNN, lexical BM25, and entity matching.
+- `limit` — max results (default 10)
+- `detail` — set to `"full"` for all fields
+- `level` — pyramid compression level applied to returned engrams
 
 #### `GET /v1/engrams/{id}`
 
@@ -282,11 +310,24 @@ Request:
 List extracted named entities. Returns `[{id, name}]` by default.
 
 Query params:
-- `query` — text search over entity names and aliases
 - `detail=full` — return all fields
 - `type` — filter by entity type
 - `level` — pyramid compression level (same semantics as engrams)
-- `limit` — max results (default 100; default 10 when using `?query=`)
+- `limit` — max results (default 100)
+
+#### `POST /v1/entities/search`
+
+Text search over entity names and aliases. Returns `[{id, name}]` by default.
+
+Request:
+```json
+{"query": "Alice", "limit": 10, "detail": "full", "level": 0}
+```
+
+- `query` — required; text search over entity names and aliases
+- `limit` — max results (default 10)
+- `detail` — set to `"full"` for all fields
+- `level` — pyramid compression level applied to returned entities
 
 #### `GET /v1/entities/{id}`
 

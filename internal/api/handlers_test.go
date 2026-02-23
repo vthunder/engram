@@ -252,7 +252,55 @@ func TestIngestThought_Success(t *testing.T) {
 	}
 }
 
-// --- Query on list endpoints ---
+// --- Search endpoints ---
+
+func TestSearchEpisodes_EmptyDB(t *testing.T) {
+	_, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	resp := doRequest(t, srv, http.MethodPost, "/v1/episodes/search", `{"query":"anything"}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 on empty DB search, got %d", resp.StatusCode)
+	}
+}
+
+func TestSearchEpisodes_MissingQuery(t *testing.T) {
+	_, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	resp := doRequest(t, srv, http.MethodPost, "/v1/episodes/search", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing query, got %d", resp.StatusCode)
+	}
+}
+
+func TestSearchEntities_EmptyDB(t *testing.T) {
+	_, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	resp := doRequest(t, srv, http.MethodPost, "/v1/entities/search", `{"query":"Alice"}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 on empty DB search, got %d", resp.StatusCode)
+	}
+}
+
+func TestSearchEntities_MissingQuery(t *testing.T) {
+	_, srv, cleanup := setupTestServices(t)
+	defer cleanup()
+
+	resp := doRequest(t, srv, http.MethodPost, "/v1/entities/search", `{}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing query, got %d", resp.StatusCode)
+	}
+}
 
 func TestSearchEngrams_EmptyDB(t *testing.T) {
 	_, srv, cleanup := setupTestServices(t)
