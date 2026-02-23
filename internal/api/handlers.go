@@ -29,26 +29,38 @@ type Services struct {
 
 // engramCard returns the default engram representation.
 func engramCard(e *graph.Engram) map[string]any {
-	return map[string]any{
+	card := map[string]any{
 		"id":         e.ID,
 		"summary":    e.Summary,
 		"event_time": e.EventTime,
 	}
+	if e.Level > 0 {
+		card["level"] = e.Level
+	}
+	return card
 }
 
 // entityCard returns the minimal entity representation: {id, name}.
 func entityCard(e *graph.Entity) map[string]any {
-	return map[string]any{"id": e.ID, "name": e.Name}
+	card := map[string]any{"id": e.ID, "name": e.Name}
+	if e.Level > 0 {
+		card["level"] = e.Level
+	}
+	return card
 }
 
 // episodeCard returns the default episode representation.
 func episodeCard(e *graph.Episode) map[string]any {
-	return map[string]any{
+	card := map[string]any{
 		"id":              e.ID,
 		"content":         e.Content,
 		"timestamp_event": e.TimestampEvent,
 		"author":          e.Author,
 	}
+	if e.Level > 0 {
+		card["level"] = e.Level
+	}
+	return card
 }
 
 // parseDetail returns true if ?detail=full is set.
@@ -73,6 +85,7 @@ func applyEngramLevels(g *graph.DB, engrams []*graph.Engram, level int) {
 	for _, e := range engrams {
 		if s, ok := summaries[e.ID]; ok {
 			e.Summary = s.Summary
+			e.Level = s.CompressionLevel
 		}
 	}
 }
@@ -94,6 +107,7 @@ func applyEntityLevels(g *graph.DB, entities []*graph.Entity, level int) {
 	for _, e := range entities {
 		if s, ok := summaries[e.ID]; ok {
 			e.Summary = s.Summary
+			e.Level = s.CompressionLevel
 		}
 	}
 }
@@ -116,6 +130,7 @@ func applyEpisodeLevels(g *graph.DB, episodes []*graph.Episode, level int) {
 	for _, e := range episodes {
 		if s, ok := summaries[e.ID]; ok {
 			e.Content = s.Summary
+			e.Level = s.CompressionLevel
 		}
 	}
 }

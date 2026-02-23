@@ -90,6 +90,7 @@ const (
 type Episode struct {
 	ID                   string    `json:"id"`
 	Content              string    `json:"content"`
+	Level                int       `json:"level,omitempty"`    // Compression level applied (0 = original)
 	TokenCount           int       `json:"token_count"`        // Pre-computed token count
 	Source               string    `json:"source"`             // discord, calendar, etc.
 	Author               string    `json:"author,omitempty"`
@@ -115,6 +116,7 @@ type Entity struct {
 	Embedding []float64  `json:"embedding,omitempty"`
 	Aliases   []string   `json:"aliases,omitempty"`
 	Summary   string     `json:"summary,omitempty"` // Populated by pyramid level on retrieval
+	Level     int        `json:"level,omitempty"`   // Compression level applied (0 = original)
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 }
@@ -131,6 +133,7 @@ const (
 type Engram struct {
 	ID         string     `json:"id"`
 	Summary    string     `json:"summary"`
+	Level      int        `json:"level,omitempty"` // Compression level applied (0 = stored summary)
 	Topic      string     `json:"topic,omitempty"`
 	EngramType EngramType `json:"engram_type,omitempty"`
 	Activation float64    `json:"activation"`
