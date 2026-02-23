@@ -272,26 +272,78 @@ paths:
                     type: string
                     format: date-time
 
+  /v1/episodes/search:
+    post:
+      summary: Search episodes by text
+      description: |
+        Text search over episode content. Returns `[{id, content}]` by default.
+        Add `"detail": "full"` in the request body for all fields.
+      operationId: searchEpisodes
+      tags:
+        - Episodes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Text substring search over episode content
+                limit:
+                  type: integer
+                  default: 10
+                  description: Maximum results (default 10)
+                detail:
+                  type: string
+                  enum: [full]
+                  description: "Return full fields instead of minimal. Use `\"detail\": \"full\"`."
+                level:
+                  type: integer
+                  default: 0
+                  minimum: 0
+                  description: |
+                    Apply pyramid compression to the `content` field before returning.
+                    Valid targets: 4, 8, 16, 32, 64 (approx word count). 0 = verbatim (default).
+      responses:
+        "200":
+          description: List of matching episodes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Episode"
+        "400":
+          description: Missing or invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/episodes:
     get:
-      summary: List or search episodes
+      summary: List episodes
       description: |
-        List raw episodes with optional filtering, or search by text with `?query=`.
+        List raw episodes with optional filtering.
 
         **Default response** is minimal: `[{id, content}]`.
         Add `?detail=full` for all fields (embeddings are never returned).
 
-        Filters `channel`, `unconsolidated`, `before`, and `level` compose freely.
-        The `?query=` text search path does not combine with these filters.
+        All filters compose freely: `?channel=X&unconsolidated=true&before={id}&level=8` is valid.
       operationId: listEpisodes
       tags:
         - Episodes
       parameters:
-        - name: query
-          in: query
-          schema:
-            type: string
-          description: Text substring search over episode content. Does not combine with other filters.
         - name: channel
           in: query
           schema:
@@ -661,11 +713,73 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/engrams/search:
+    post:
+      summary: Search engrams by semantic query
+      description: |
+        Semantic search via spreading activation. Returns ranked engrams matching the query.
+
+        **Default response** is minimal: `[{id, summary}]`.
+        Add `"detail": "full"` in the request body for all fields.
+
+        Retrieval uses three concurrent seed triggers: semantic KNN, lexical BM25, and entity
+        regex matching. When a NER service is configured, entities extracted from the query
+        string also seed the activation graph (fourth trigger).
+      operationId: searchEngrams
+      tags:
+        - Engrams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Natural language search query
+                limit:
+                  type: integer
+                  default: 10
+                  description: Maximum results (default 10)
+                detail:
+                  type: string
+                  enum: [full]
+                  description: "Return full fields instead of minimal. Use `\"detail\": \"full\"`."
+                level:
+                  type: integer
+                  default: 0
+                  minimum: 0
+                  description: "Summary compression level: 0 = verbatim (default); N = approx N-word summary"
+      responses:
+        "200":
+          description: Ranked list of matching engrams (minimal by default)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Engram"
+        "400":
+          description: Missing or invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/engrams:
     get:
-      summary: List or search engrams
+      summary: List engrams
       description: |
-        List consolidated memory engrams, or search them semantically with `?query=`.
+        List consolidated memory engrams.
 
         **Default response** is minimal: `[{id, summary}]`.
         Add `?detail=full` for all fields (embeddings are never returned).
@@ -673,15 +787,6 @@ paths:
       tags:
         - Engrams
       parameters:
-        - name: query
-          in: query
-          schema:
-            type: string
-          description: |
-            Natural language search query. Retrieval uses spreading activation with
-            three concurrent seed triggers: semantic KNN, lexical BM25, and entity
-            regex matching. When a NER service is configured, entities extracted from
-            the query string also seed the activation graph (fourth trigger).
         - name: detail
           in: query
           schema:
@@ -695,18 +800,12 @@ paths:
             default: 0
             minimum: 0
           description: "Summary compression level for all returned engrams: 0 = verbatim (default); N = approx N-word summary"
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            default: 10
-          description: Maximum results when using ?query= (ignored for list-all)
         - name: threshold
           in: query
           schema:
             type: number
             format: double
-          description: Filter by minimum activation level (without ?query=)
+          description: Filter by minimum activation level
       responses:
         "200":
           description: List of engrams (minimal by default)
@@ -928,11 +1027,67 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/entities/search:
+    post:
+      summary: Search entities by name
+      description: |
+        Text search over entity names and aliases. Returns `[{id, name}]` by default.
+        Add `"detail": "full"` in the request body for all fields.
+      operationId: searchEntities
+      tags:
+        - Entities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: Text search over entity names and aliases
+                limit:
+                  type: integer
+                  default: 10
+                  description: Maximum results (default 10)
+                detail:
+                  type: string
+                  enum: [full]
+                  description: "Return full fields instead of minimal. Use `\"detail\": \"full\"`."
+                level:
+                  type: integer
+                  default: 0
+                  minimum: 0
+                  description: "Summary compression level: 0 = verbatim (default); N = approx N-word summary"
+      responses:
+        "200":
+          description: List of matching entities
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Entity"
+        "400":
+          description: Missing or invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /v1/entities:
     get:
-      summary: List or search entities
+      summary: List entities
       description: |
-        List extracted named entities, or search them by name with `?query=`.
+        List extracted named entities.
 
         **Default response** is minimal: `[{id, name}]`.
         Add `?detail=full` for all fields (embeddings are never returned).
@@ -940,11 +1095,6 @@ paths:
       tags:
         - Entities
       parameters:
-        - name: query
-          in: query
-          schema:
-            type: string
-          description: Text search over entity names and aliases
         - name: detail
           in: query
           schema:
@@ -968,7 +1118,7 @@ paths:
           schema:
             type: integer
             default: 100
-          description: Maximum results (default 100; default 10 when using ?query=)
+          description: Maximum results (default 100)
       responses:
         "200":
           description: List of entities

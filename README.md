@@ -108,8 +108,10 @@ curl -X POST http://localhost:8080/v1/episodes \
   -d '{"content": "Alice mentioned she prefers morning standups.", "source": "slack", "author": "alice"}'
 
 # Query memory (spreading activation retrieval)
-curl "http://localhost:8080/v1/engrams?query=Alice+meeting+preferences" \
-  -H "Authorization: Bearer your-secret-key"
+curl -X POST http://localhost:8080/v1/engrams/search \
+  -H "Authorization: Bearer your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Alice meeting preferences", "limit": 10}'
 
 # Trigger consolidation manually
 curl -X POST http://localhost:8080/v1/consolidate \
