@@ -278,6 +278,32 @@ func (g *DB) GetEpisodeSummariesBatch(episodeIDs []string, level int) (map[strin
 	return result, nil
 }
 
+// GetEpisodesWithoutSummaries returns IDs of episodes that have no entry in
+// episode_summaries, up to limit rows. Used by EpisodeCompressQueue to
+// backfill compression for episodes that were missed or added before the
+// compress queue existed.
+func (g *DB) GetEpisodesWithoutSummaries(limit int) ([]string, error) {
+	rows, err := g.db.Query(`
+		SELECT e.id FROM episodes e
+		WHERE NOT EXISTS (
+			SELECT 1 FROM episode_summaries es WHERE es.episode_id = e.id
+		)
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // StoreEmbeddingJSON is a helper to serialize embeddings to JSON for storage
 func StoreEmbeddingJSON(embedding []float64) ([]byte, error) {
 	return json.Marshal(embedding)

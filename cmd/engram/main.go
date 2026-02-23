@@ -70,8 +70,9 @@ func main() {
 		logger.Info("NER client configured", "provider", "spacy", "url", cfg.NER.SpacyURL)
 	}
 
-	// Set up LLM for consolidation
+	// Set up LLM for consolidation and episode compression
 	var consolidator *consolidate.Consolidator
+	var compressQueue *graph.EpisodeCompressQueue
 	if cfg.Consolidation.Enabled {
 		var llmClient consolidate.LLMClient
 		var claudeInfer *consolidate.ClaudeInference
@@ -101,6 +102,8 @@ func main() {
 			consolidator.BotAuthorID = cfg.Identity.AuthorID
 			consolidator.OwnerIDs = cfg.Identity.OwnerIDs
 			logger.Info("consolidation enabled", "interval", cfg.Consolidation.Interval)
+
+			compressQueue = graph.NewEpisodeCompressQueue(db, llmClient, logger)
 		} else {
 			logger.Warn("consolidation disabled: no LLM client available")
 		}
@@ -108,13 +111,14 @@ func main() {
 
 	// Wire services
 	svc := &api.Services{
-		Graph:        db,
-		EmbedClient:  embedClient,
-		NERClient:    nerClient,
-		Consolidator: consolidator,
-		Logger:       logger,
-		BotName:      cfg.Identity.Name,
-		BotAuthorID:  cfg.Identity.AuthorID,
+		Graph:         db,
+		EmbedClient:   embedClient,
+		NERClient:     nerClient,
+		Consolidator:  consolidator,
+		CompressQueue: compressQueue,
+		Logger:        logger,
+		BotName:       cfg.Identity.Name,
+		BotAuthorID:   cfg.Identity.AuthorID,
 	}
 
 	mcpSvc := &engrammcp.Services{
@@ -130,6 +134,11 @@ func main() {
 
 	if consolidator != nil && cfg.Consolidation.Interval > 0 {
 		go runConsolidation(ctx, consolidator, cfg.Consolidation, logger)
+	}
+
+	if compressQueue != nil {
+		go compressQueue.Start(ctx)
+		logger.Info("episode compression queue started")
 	}
 
 	if cfg.Decay.Interval > 0 {

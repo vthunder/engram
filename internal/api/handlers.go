@@ -15,13 +15,14 @@ import (
 
 // Services holds all the dependencies wired into handlers.
 type Services struct {
-	Graph        *graph.DB
-	EmbedClient  *embed.Client
-	NERClient    *ner.Client
-	Consolidator *consolidate.Consolidator
-	Logger       *slog.Logger
-	BotName      string // from identity config; empty = no identity configured
-	BotAuthorID  string // from identity config
+	Graph         *graph.DB
+	EmbedClient   *embed.Client
+	NERClient     *ner.Client
+	Consolidator  *consolidate.Consolidator
+	CompressQueue *graph.EpisodeCompressQueue
+	Logger        *slog.Logger
+	BotName       string // from identity config; empty = no identity configured
+	BotAuthorID   string // from identity config
 }
 
 // --- Response helpers ---
@@ -189,6 +190,10 @@ func (s *Services) handleIngestEpisode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.CompressQueue != nil {
+		s.CompressQueue.Enqueue(ep.ID)
+	}
+
 	// Extract and link entities in background if NER is available
 	if s.NERClient != nil {
 		go func() {
@@ -244,6 +249,10 @@ func (s *Services) handleIngestThought(w http.ResponseWriter, r *http.Request) {
 	if err := s.Graph.AddEpisode(ep); err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
+	}
+
+	if s.CompressQueue != nil {
+		s.CompressQueue.Enqueue(ep.ID)
 	}
 
 	// Extract and link entities in background if NER is available
