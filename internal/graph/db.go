@@ -1042,7 +1042,11 @@ func (g *DB) ensureVecTable(dim int) error {
 		if serErr != nil {
 			continue
 		}
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO engram_vec(rowid, embedding, engram_id) VALUES (?, ?, ?)`, rowid, serialized, id); err != nil {
+		if _, err := tx.Exec(`DELETE FROM engram_vec WHERE rowid = ?`, rowid); err != nil {
+			log.Printf("[graph] vec backfill delete failed for %s: %v", id, err)
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO engram_vec(rowid, embedding, engram_id) VALUES (?, ?, ?)`, rowid, serialized, id); err != nil {
 			log.Printf("[graph] vec backfill failed for %s: %v", id, err)
 			continue
 		}
