@@ -25,6 +25,16 @@ type Services struct {
 	BotAuthorID   string // from identity config
 }
 
+// nonNil returns s unchanged when non-nil, or an empty (non-nil) slice of the
+// same type. This prevents encoding/json from serialising nil slices as JSON
+// null instead of [].
+func nonNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
 // --- Response helpers ---
 
 // engramCard returns the default engram representation.
@@ -417,7 +427,7 @@ func (s *Services) handleSearchEngrams(w http.ResponseWriter, r *http.Request) {
 		for _, e := range result.Engrams {
 			e.Embedding = nil
 		}
-		writeJSON(w, http.StatusOK, result.Engrams)
+		writeJSON(w, http.StatusOK, nonNil(result.Engrams))
 	} else {
 		cards := make([]map[string]any, 0, len(result.Engrams))
 		for _, e := range result.Engrams {
@@ -465,7 +475,7 @@ func writeEngramList(w http.ResponseWriter, engrams []*graph.Engram, full bool) 
 		for _, e := range engrams {
 			e.Embedding = nil
 		}
-		writeJSON(w, http.StatusOK, engrams)
+		writeJSON(w, http.StatusOK, nonNil(engrams))
 	} else {
 		cards := make([]map[string]any, 0, len(engrams))
 		for _, e := range engrams {
@@ -566,8 +576,8 @@ func (s *Services) handleGetEngramContext(w http.ResponseWriter, r *http.Request
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"engram":          engram,
-			"source_episodes": sources,
-			"linked_entities": entities,
+			"source_episodes": nonNil(sources),
+			"linked_entities": nonNil(entities),
 		})
 	} else {
 		sourcCards := make([]map[string]any, 0, len(sources))
@@ -662,7 +672,7 @@ func writeEpisodeList(w http.ResponseWriter, episodes []*graph.Episode, full boo
 		for _, e := range episodes {
 			e.Embedding = nil
 		}
-		writeJSON(w, http.StatusOK, episodes)
+		writeJSON(w, http.StatusOK, nonNil(episodes))
 	} else {
 		cards := make([]map[string]any, 0, len(episodes))
 		for _, e := range episodes {
@@ -844,7 +854,7 @@ func writeEntityList(w http.ResponseWriter, entities []*graph.Entity, full bool)
 		for _, e := range entities {
 			e.Embedding = nil
 		}
-		writeJSON(w, http.StatusOK, entities)
+		writeJSON(w, http.StatusOK, nonNil(entities))
 	} else {
 		cards := make([]map[string]any, 0, len(entities))
 		for _, e := range entities {
