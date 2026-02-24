@@ -2,6 +2,10 @@
 
 **Episodic memory service for AI agents — automatic consolidation, neuroscience-inspired retrieval.**
 
+| Dashboard | Graph view |
+|-----------|------------|
+| ![Dashboard showing engram counts, recent memories, and API health](docs/screenshots/engram-dash.png) | ![Graph view showing engram and entity nodes connected by relationships](docs/screenshots/engram-graph.png) |
+
 ## The Problem
 
 AI agents are stateless. When a bot conversation ends, every observation, preference, and decision it accumulated is gone. Naive solutions make this worse: storing raw messages and doing keyword search gives you a log, not a memory. Flat embeddings + cosine similarity retrieves what *matches* your query, not what's *relevant* to it.
@@ -125,6 +129,24 @@ curl -X POST http://localhost:8080/v1/engrams/search \
 
 # Trigger consolidation manually
 curl -X POST http://localhost:8080/v1/consolidate
+```
+
+## Web UI
+
+A browser UI for browsing engrams, episodes, entities, and the memory graph ships in the `ui/` directory.
+
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+Open http://localhost:5173. The dev server proxies `/v1` and `/health` to `http://localhost:8080`, so no CORS configuration is needed.
+
+To point the UI at a different host (e.g. a remote server), edit `ui/public/config.json` — no rebuild required:
+
+```json
+{ "apiUrl": "http://your-server:8080", "apiKey": "your-secret-key" }
 ```
 
 ## MCP
