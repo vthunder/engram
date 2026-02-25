@@ -16,11 +16,13 @@ func TestDefaults(t *testing.T) {
 	if cfg.Storage.Path != "./engram.db" {
 		t.Errorf("default storage path = %q, want ./engram.db", cfg.Storage.Path)
 	}
-	if cfg.LLM.Provider != "anthropic" {
-		t.Errorf("default LLM provider = %q, want anthropic", cfg.LLM.Provider)
+	// LLM is deprecated; check resolved per-function configs instead
+	consolidationLLM := cfg.ResolvedConsolidationLLM()
+	if consolidationLLM.Provider != "anthropic" {
+		t.Errorf("default consolidation LLM provider = %q, want anthropic", consolidationLLM.Provider)
 	}
-	if cfg.LLM.Model != "claude-sonnet-4-6" {
-		t.Errorf("default LLM model = %q, want claude-sonnet-4-6", cfg.LLM.Model)
+	if consolidationLLM.Model != "claude-haiku-4-5-20251001" {
+		t.Errorf("default consolidation LLM model = %q, want claude-haiku-4-5-20251001", consolidationLLM.Model)
 	}
 	if cfg.Embedding.BaseURL != "http://localhost:11434" {
 		t.Errorf("default embedding base URL = %q, want http://localhost:11434", cfg.Embedding.BaseURL)
@@ -370,10 +372,6 @@ ner:
 
 	if cfg.Server.Port != 9999 {
 		t.Errorf("port = %d, want 9999", cfg.Server.Port)
-	}
-	// Defaults still intact
-	if cfg.LLM.Model != "claude-sonnet-4-6" {
-		t.Errorf("llm.model = %q, want default claude-sonnet-4-6", cfg.LLM.Model)
 	}
 	if cfg.Embedding.Model != "nomic-embed-text" {
 		t.Errorf("embedding.model = %q, want default nomic-embed-text", cfg.Embedding.Model)

@@ -818,7 +818,7 @@ func TestUpdateEngram(t *testing.T) {
 	// Update with new summary, embedding, type
 	newSummary := "Updated content with richer context about the project"
 	newEmbedding := []float64{0.1, 0.2, 0.3, 0.4, 0.5}
-	if err := db.UpdateEngram("engram-update-1", newSummary, newEmbedding, EngramTypeKnowledge, 3); err != nil {
+	if err := db.UpdateEngram("engram-update-1", newSummary, newEmbedding, EngramTypeKnowledge, 3, time.Time{}); err != nil {
 		t.Fatalf("UpdateEngram failed: %v", err)
 	}
 
@@ -918,7 +918,7 @@ func TestReconsolidationEndToEnd(t *testing.T) {
 	// Build new summary from all episodes (simulating LLM summarization)
 	newSummary := "Alice joined Nightshade as tech lead and is now leading the privacy initiative"
 	newEmbedding := []float64{0.5, 0.6, 0.7}
-	if err := db.UpdateEngram("engram-e2e-recon", newSummary, newEmbedding, EngramTypeKnowledge, len(allEpisodes)); err != nil {
+	if err := db.UpdateEngram("engram-e2e-recon", newSummary, newEmbedding, EngramTypeKnowledge, len(allEpisodes), time.Time{}); err != nil {
 		t.Fatalf("UpdateEngram failed: %v", err)
 	}
 
