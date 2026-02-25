@@ -34,6 +34,7 @@ func NewServer(svc *Services) *server.MCPServer {
 	s.AddTool(getEngramTool(), getEngramHandler(svc))
 	s.AddTool(getEngramContextTool(), getEngramContextHandler(svc))
 	s.AddTool(queryEpisodeTool(), queryEpisodeHandler(svc))
+	s.AddTool(listSchemasTool(), listSchemasHandler(svc))
 
 	return s
 }
@@ -268,6 +269,50 @@ func queryEpisodeHandler(svc *Services) server.ToolHandlerFunc {
 		}
 
 		data, _ := json.MarshalIndent(ep, "", "  ")
+		return mcpgo.NewToolResultText(string(data)), nil
+	}
+}
+
+// --- Tool: list_schemas ---
+
+func listSchemasTool() mcpgo.Tool {
+	return mcpgo.NewTool("list_schemas",
+		mcpgo.WithDescription("List all memory schemas — cross-cutting pattern templates extracted from recurring engram clusters. Each schema has a name, PATTERN description, and GENERALIZATIONS."),
+	)
+}
+
+func listSchemasHandler(svc *Services) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		schemas, err := svc.Graph.ListSchemas()
+		if err != nil {
+			return mcpgo.NewToolResultError(fmt.Sprintf("db error: %v", err)), nil
+		}
+		if len(schemas) == 0 {
+			return mcpgo.NewToolResultText("No schemas found. Schema induction runs automatically after recursive consolidation produces L2+ engrams."), nil
+		}
+
+		// Return without embeddings (they're large and not useful for inspection)
+		type schemaOut struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			Content   string `json:"content"`
+			IsLabile  bool   `json:"is_labile,omitempty"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+		out := make([]schemaOut, len(schemas))
+		for i, s := range schemas {
+			out[i] = schemaOut{
+				ID:        s.ID,
+				Name:      s.Name,
+				Content:   s.Content,
+				IsLabile:  s.IsLabile,
+				CreatedAt: s.CreatedAt.Format("2006-01-02"),
+				UpdatedAt: s.UpdatedAt.Format("2006-01-02"),
+			}
+		}
+
+		data, _ := json.MarshalIndent(out, "", "  ")
 		return mcpgo.NewToolResultText(string(data)), nil
 	}
 }

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"log"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -11,18 +13,20 @@ import (
 	"github.com/vthunder/engram/internal/embed"
 	"github.com/vthunder/engram/internal/graph"
 	"github.com/vthunder/engram/internal/ner"
+	engramschema "github.com/vthunder/engram/internal/schema"
 )
 
 // Services holds all the dependencies wired into handlers.
 type Services struct {
-	Graph         *graph.DB
-	EmbedClient   *embed.Client
-	NERClient     *ner.Client
-	Consolidator  *consolidate.Consolidator
-	CompressQueue *graph.EpisodeCompressQueue
-	Logger        *slog.Logger
-	BotName       string // from identity config; empty = no identity configured
-	BotAuthorID   string // from identity config
+	Graph          *graph.DB
+	EmbedClient    *embed.Client
+	NERClient      *ner.Client
+	Consolidator   *consolidate.Consolidator
+	CompressQueue  *graph.EpisodeCompressQueue
+	SchemaInductor *engramschema.SchemaInductor
+	Logger         *slog.Logger
+	BotName        string // from identity config; empty = no identity configured
+	BotAuthorID    string // from identity config
 }
 
 // nonNil returns s unchanged when non-nil, or an empty (non-nil) slice of the
@@ -153,6 +157,30 @@ func parseLevel(r *http.Request) int {
 		}
 	}
 	return 0
+}
+
+// parseDepth parses ?depth= (-1 = no filter / all depths).
+func parseDepth(r *http.Request) int {
+	if d := r.URL.Query().Get("depth"); d != "" {
+		if n, err := strconv.Atoi(d); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return -1
+}
+
+// filterByDepth returns only engrams matching the given depth. No-op when depth < 0.
+func filterByDepth(engrams []*graph.Engram, depth int) []*graph.Engram {
+	if depth < 0 {
+		return engrams
+	}
+	out := make([]*graph.Engram, 0, len(engrams))
+	for _, e := range engrams {
+		if e.Depth == depth {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // parseLimit parses ?limit= with a given default.
@@ -329,9 +357,23 @@ func (s *Services) handleConsolidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Run recursive consolidation (L2+) asynchronously to avoid HTTP timeout on large batches.
+	rStarted := false
+	if ok, _ := s.Consolidator.ShouldRunRecursive(10, 24); ok {
+		rStarted = true
+		go func() {
+			if n, err := s.Consolidator.RunRecursive(context.Background()); err != nil {
+				log.Printf("[consolidate] async RunRecursive error: %v", err)
+			} else {
+				log.Printf("[consolidate] async RunRecursive: %d higher-depth engrams created", n)
+			}
+		}()
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"engrams_created": created,
-		"duration_ms":     time.Since(start).Milliseconds(),
+		"engrams_created":   created,
+		"recursive_started": rStarted,
+		"duration_ms":       time.Since(start).Milliseconds(),
 	})
 }
 
@@ -440,6 +482,7 @@ func (s *Services) handleSearchEngrams(w http.ResponseWriter, r *http.Request) {
 func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 	full := parseDetail(r)
 	level := parseLevel(r)
+	depth := parseDepth(r)
 
 	// Threshold filter path
 	thresholdStr := r.URL.Query().Get("threshold")
@@ -455,6 +498,7 @@ func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 			return
 		}
+		engrams = filterByDepth(engrams, depth)
 		applyEngramLevels(s.Graph, engrams, level)
 		writeEngramList(w, engrams, full)
 		return
@@ -466,6 +510,7 @@ func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
+	engrams = filterByDepth(engrams, depth)
 	applyEngramLevels(s.Graph, engrams, level)
 	writeEngramList(w, engrams, full)
 }
@@ -535,6 +580,68 @@ func (s *Services) handleGetEngram(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, engram)
 	} else {
 		writeJSON(w, http.StatusOK, engramCard(engram))
+	}
+}
+
+// handleGetEngramChildren returns the source nodes for an engram.
+// For L2+ engrams (depth > 0): returns source engrams via CONSOLIDATED_FROM edges.
+// For L1 engrams (depth = 0): returns source episodes.
+func (s *Services) handleGetEngramChildren(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	level := parseLevel(r)
+
+	engram, err := s.Graph.GetEngram(id)
+	if err != nil || engram == nil {
+		fullID, resolveErr := s.Graph.ResolveEngramID(id)
+		if resolveErr != nil {
+			writeError(w, http.StatusNotFound, "not_found", "engram not found")
+			return
+		}
+		engram, err = s.Graph.GetEngram(fullID)
+		if err != nil || engram == nil {
+			writeError(w, http.StatusNotFound, "not_found", "engram not found")
+			return
+		}
+	}
+
+	if engram.Depth > 0 {
+		// L2+ engram: children are source engrams
+		children, err := s.Graph.GetEngramChildren(engram.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		applyEngramLevels(s.Graph, children, level)
+		cards := make([]map[string]any, 0, len(children))
+		for _, c := range children {
+			card := engramCard(c)
+			card["depth"] = c.Depth
+			cards = append(cards, card)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"engram_id": engram.ID,
+			"depth":     engram.Depth,
+			"type":      "engrams",
+			"children":  nonNil(cards),
+		})
+	} else {
+		// L1 engram: children are source episodes
+		sources, _ := s.Graph.GetEngramSourceEpisodes(engram.ID)
+		sourcePtrs := make([]*graph.Episode, len(sources))
+		for i := range sources {
+			sourcePtrs[i] = &sources[i]
+		}
+		applyEpisodeLevels(s.Graph, sourcePtrs, level)
+		cards := make([]map[string]any, 0, len(sourcePtrs))
+		for _, ep := range sourcePtrs {
+			cards = append(cards, episodeCard(ep))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"engram_id": engram.ID,
+			"depth":     0,
+			"type":      "episodes",
+			"children":  nonNil(cards),
+		})
 	}
 }
 
@@ -984,6 +1091,49 @@ func (s *Services) handleBoostEngrams(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Management ---
+
+// handleRegenerateEngramPyramids regenerates stored pyramid summaries (L4–L64) for all
+// engrams (or a depth-filtered subset) using the current compression prompts.
+// The operation runs in the background; the endpoint returns immediately with a count of
+// engrams queued. Optional query param: ?depth=0 to process only L1 engrams.
+func (s *Services) handleRegenerateEngramPyramids(w http.ResponseWriter, r *http.Request) {
+	if s.CompressQueue == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_configured", "compression not configured")
+		return
+	}
+	compressor := s.CompressQueue.Compressor()
+
+	depth := parseDepth(r)
+
+	engrams, err := s.Graph.GetAllEngrams()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	engrams = filterByDepth(engrams, depth)
+
+	count := len(engrams)
+	botName := s.BotName
+	logger := s.Logger
+
+	go func() {
+		done, failed := 0, 0
+		for _, e := range engrams {
+			if err := s.Graph.RegenerateEngramPyramid(e.ID, compressor, botName); err != nil {
+				logger.Warn("pyramid regen failed", "id", e.ID, "err", err)
+				failed++
+				continue
+			}
+			done++
+		}
+		logger.Info("engram pyramid regeneration complete", "done", done, "failed", failed, "total", count)
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"started": count,
+		"depth":   depth,
+	})
+}
 
 func (s *Services) handleFlush(w http.ResponseWriter, r *http.Request) {
 	if s.Consolidator != nil {

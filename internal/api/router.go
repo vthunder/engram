@@ -31,9 +31,11 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 		r.Post("/v1/engrams/search", svc.handleSearchEngrams)
 		r.Get("/v1/engrams/{id}", svc.handleGetEngram)
 		r.Delete("/v1/engrams/{id}", svc.handleDeleteEngram)
+		r.Get("/v1/engrams/{id}/children", svc.handleGetEngramChildren)
 		r.Get("/v1/engrams/{id}/context", svc.handleGetEngramContext)
 		r.Post("/v1/engrams/{id}/reinforce", svc.handleReinforceEngram)
 		r.Post("/v1/engrams/boost", svc.handleBoostEngrams)
+		r.Post("/v1/engrams/regenerate-pyramids", svc.handleRegenerateEngramPyramids)
 
 		// Episodes
 		r.Get("/v1/episodes", svc.handleListEpisodes)
@@ -48,6 +50,12 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 		r.Post("/v1/entities/search", svc.handleSearchEntities)
 		r.Get("/v1/entities/{id}", svc.handleGetEntity)
 		r.Get("/v1/entities/{id}/engrams", svc.handleGetEntityEngrams)
+
+		// Schemas (Phase 2: Schema Formation)
+		r.Get("/v1/schemas", svc.handleListSchemas)
+		r.Get("/v1/schemas/{id}", svc.handleGetSchema)
+		r.Delete("/v1/schemas/{id}", svc.handleDeleteSchema)
+		r.Post("/v1/schemas/induce", svc.handleInduceSchemas)
 
 		// Activation
 		r.Post("/v1/activation/decay", svc.handleDecayActivation)

@@ -20,6 +20,7 @@ import (
 	"github.com/vthunder/engram/internal/graph"
 	engrammcp "github.com/vthunder/engram/internal/mcp"
 	"github.com/vthunder/engram/internal/ner"
+	engramschema "github.com/vthunder/engram/internal/schema"
 )
 
 func main() {
@@ -101,16 +102,37 @@ func main() {
 		}
 	}
 
+	// Set up schema components (Phase 2: Schema Formation).
+	// Both use the inference LLM config; schema.Generator is satisfied by the raw client.
+	var schemaInductor *engramschema.SchemaInductor
+	if schemaGen := buildRawGenerator(infer); schemaGen != nil && embedClient != nil {
+		schemaInductor = engramschema.NewSchemaInductor(db, schemaGen, embedClient, false)
+
+		// Wire the forward matcher as a hook on the consolidator.
+		// This runs async after each new L1 engram is created.
+		if consolidator != nil {
+			forwardMatcher := engramschema.NewForwardMatcher(db, schemaGen, embedClient, false)
+			consolidator.NewEngramHook = func(engram *graph.Engram) {
+				forwardMatcher.MatchAndUpdate(context.Background(), engram)
+			}
+		}
+
+		logger.Info("schema induction and forward matching enabled")
+	} else {
+		logger.Warn("schema induction disabled: no inference LLM or embed client")
+	}
+
 	// Wire services
 	svc := &api.Services{
-		Graph:         db,
-		EmbedClient:   embedClient,
-		NERClient:     nerClient,
-		Consolidator:  consolidator,
-		CompressQueue: compressQueue,
-		Logger:        logger,
-		BotName:       cfg.Identity.Name,
-		BotAuthorID:   cfg.Identity.AuthorID,
+		Graph:          db,
+		EmbedClient:    embedClient,
+		NERClient:      nerClient,
+		Consolidator:   consolidator,
+		CompressQueue:  compressQueue,
+		SchemaInductor: schemaInductor,
+		Logger:         logger,
+		BotName:        cfg.Identity.Name,
+		BotAuthorID:    cfg.Identity.AuthorID,
 	}
 
 	mcpSvc := &engrammcp.Services{
@@ -135,6 +157,11 @@ func main() {
 
 	if cfg.Decay.Interval > 0 {
 		go runDecay(ctx, db, cfg.Decay, logger)
+	}
+
+	// Background schema induction: runs every 6 hours, much less frequent than consolidation.
+	if schemaInductor != nil {
+		go runSchemaInduction(ctx, schemaInductor, 6*time.Hour, logger)
 	}
 
 	// REST server
@@ -206,6 +233,19 @@ func runConsolidation(ctx context.Context, c *consolidate.Consolidator, cfg conf
 				logger.Error("background consolidation failed", "err", err)
 			} else if created > 0 {
 				logger.Info("background consolidation complete", "engrams_created", created, "duration_ms", time.Since(start).Milliseconds())
+			}
+
+			// Recursive consolidation: cluster L1 engrams into L2/L3.
+			// Trigger: at least 10 ungrouped L1 engrams exist.
+			if shouldRecurse, err := c.ShouldRunRecursive(10, 24); err == nil && shouldRecurse {
+				logger.Info("recursive consolidation starting")
+				rStart := time.Now()
+				rCreated, rErr := c.RunRecursive(ctx)
+				if rErr != nil {
+					logger.Error("recursive consolidation failed", "err", rErr)
+				} else if rCreated > 0 {
+					logger.Info("recursive consolidation complete", "engrams_created", rCreated, "duration_ms", time.Since(rStart).Milliseconds())
+				}
 			}
 		}
 	}
@@ -329,4 +369,53 @@ func buildInferenceClient(cfg config.LLMConfig) *consolidate.ClaudeInference {
 		return consolidate.NewClaudeInferenceFromGenerator(ccc, false)
 	}
 	return nil
+}
+
+// buildRawGenerator returns a consolidate.Generator (raw LLM client) for use with
+// the schema inductor. The schema.Generator interface has the same signature as
+// consolidate.Generator, so any consolidate.Generator satisfies it.
+func buildRawGenerator(cfg config.LLMConfig) consolidate.Generator {
+	switch cfg.Provider {
+	case "anthropic":
+		return consolidate.NewAnthropicClient(cfg.Model, cfg.APIKey, false)
+	case "claude-code":
+		return consolidate.NewClaudeCodeClient(cfg.BinaryPath, cfg.Model, false)
+	}
+	return nil
+}
+
+// runSchemaInduction periodically triggers schema induction from L2+ engrams.
+func runSchemaInduction(ctx context.Context, inductor *engramschema.SchemaInductor, interval time.Duration, logger *slog.Logger) {
+	// Initial delay: wait for consolidation to produce L2+ engrams first.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Minute):
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			ok, err := inductor.ShouldRun()
+			if err != nil {
+				logger.Warn("schema induction eligibility check failed", "err", err)
+				continue
+			}
+			if !ok {
+				continue
+			}
+			logger.Info("background schema induction starting")
+			start := time.Now()
+			n, err := inductor.InduceSchemas(ctx)
+			if err != nil {
+				logger.Error("background schema induction failed", "err", err)
+			} else if n > 0 {
+				logger.Info("background schema induction complete", "schemas_updated", n, "duration_ms", time.Since(start).Milliseconds())
+			}
+		}
+	}
 }
