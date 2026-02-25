@@ -97,6 +97,14 @@ func (si *SchemaInductor) InduceSchemas(ctx context.Context) (int, error) {
 	}
 
 	log.Printf("[schema-inductor] induction complete: %d schemas created/updated", total)
+
+	// Post-induction deduplication: merge schemas that are near-duplicates.
+	if mergeCount, err := si.deduplicateSchemas(ctx); err != nil {
+		log.Printf("[schema-inductor] deduplication error: %v", err)
+	} else if mergeCount > 0 {
+		log.Printf("[schema-inductor] deduplication merged %d near-duplicate schemas", mergeCount)
+	}
+
 	return total, nil
 }
 
@@ -213,6 +221,76 @@ func (si *SchemaInductor) reconsolidateSchema(ctx context.Context, s *graph.Sche
 	return 1, nil
 }
 
+// deduplicateSchemas merges near-duplicate schemas (cosine sim >= 0.88).
+// For each duplicate pair, instances are reassigned to the older schema and
+// the newer schema is deleted. Returns the number of schemas merged away.
+func (si *SchemaInductor) deduplicateSchemas(ctx context.Context) (int, error) {
+	schemas, err := si.graph.ListSchemas()
+	if err != nil {
+		return 0, fmt.Errorf("listing schemas for dedup: %w", err)
+	}
+
+	const dedupThreshold = 0.88
+
+	// Track which schemas have been deleted so we skip them in later iterations
+	deleted := make(map[string]bool)
+	merged := 0
+
+	for i := 0; i < len(schemas); i++ {
+		if deleted[schemas[i].ID] {
+			continue
+		}
+		if len(schemas[i].Embedding) == 0 {
+			continue
+		}
+		for j := i + 1; j < len(schemas); j++ {
+			if deleted[schemas[j].ID] {
+				continue
+			}
+			if len(schemas[j].Embedding) == 0 {
+				continue
+			}
+			sim := cosineSim(schemas[i].Embedding, schemas[j].Embedding)
+			if sim < dedupThreshold {
+				continue
+			}
+
+			// Schemas i and j are near-duplicates. Keep i (older by index), merge j into i.
+			keeper, dup := schemas[i], schemas[j]
+
+			// Reassign all instances from dup → keeper
+			instances, err := si.graph.GetSchemaInstances(dup.ID)
+			if err != nil {
+				log.Printf("[schema-inductor] dedup: failed to get instances for %s: %v", dup.ID[:8], err)
+				continue
+			}
+			for _, inst := range instances {
+				newInst := &graph.SchemaInstance{
+					SchemaID:  keeper.ID,
+					EngramID:  inst.EngramID,
+					IsAnomaly: inst.IsAnomaly,
+					MatchedAt: inst.MatchedAt,
+				}
+				if err := si.graph.AddSchemaInstance(newInst); err != nil {
+					log.Printf("[schema-inductor] dedup: failed to reassign instance: %v", err)
+				}
+			}
+
+			if err := si.graph.DeleteSchema(dup.ID); err != nil {
+				log.Printf("[schema-inductor] dedup: failed to delete schema %s: %v", dup.ID[:8], err)
+				continue
+			}
+
+			log.Printf("[schema-inductor] dedup: merged %q (%s) into %q (%s) (sim=%.3f)",
+				dup.Name, dup.ID[:8], keeper.Name, keeper.ID[:8], sim)
+			deleted[dup.ID] = true
+			merged++
+		}
+	}
+
+	return merged, nil
+}
+
 // clusterByLLM asks the LLM to group engrams into thematic clusters.
 // The LLM receives all summaries and returns JSON cluster assignments.
 // Falls back to embedding clustering if the LLM response can't be parsed.
@@ -221,25 +299,35 @@ func (si *SchemaInductor) clusterByLLM(ctx context.Context, engrams []*graph.Eng
 		return nil, nil
 	}
 
+	minClusters := 2
+	maxClusters := len(engrams)/3 + 1
+	if maxClusters < minClusters {
+		maxClusters = minClusters
+	}
+
 	var sb strings.Builder
-	sb.WriteString("You are grouping memory engrams into thematic clusters for schema induction.\n\n")
-	sb.WriteString("Group the numbered engrams below by recurring thematic domain — what type of work or pattern does each represent?\n\n")
+	sb.WriteString("You are clustering memory engrams into distinct thematic groups for schema induction.\n\n")
+	sb.WriteString("Each cluster will become a reusable pattern template. Good clusters are:\n")
+	sb.WriteString("- DISTINCT: no two clusters should overlap in meaning\n")
+	sb.WriteString("- COHESIVE: engrams in a cluster share a specific recurring pattern\n")
+	sb.WriteString("- CONCRETE: named by the type of event, not vague labels like 'work tasks'\n\n")
 	sb.WriteString("ENGRAMS:\n")
 	for i, en := range engrams {
 		sb.WriteString(fmt.Sprintf("[%d] %s\n", i, en.Summary))
 	}
 	sb.WriteString(fmt.Sprintf(`
 Rules:
-- Create at least 2 clusters (do not put everything in one cluster)
+- Create %d–%d clusters (aim for %d)
 - Each engram belongs to exactly one cluster
-- Cluster by domain or theme, not surface wording
+- If two engrams represent similar events, they go in the same cluster
+- Do NOT create clusters that would produce overlapping schemas
 - Clusters with fewer than %d engrams will be discarded — still assign them
 
 Output JSON only, no other text:
 [
   {"cluster_id": 0, "label": "short label", "indices": [0, 3, 7]},
   {"cluster_id": 1, "label": "short label", "indices": [1, 2, 5, 6]}
-]`, si.MinClusterSize))
+]`, minClusters, maxClusters, (minClusters+maxClusters)/2, si.MinClusterSize))
 
 	raw, err := si.llm.Generate(ctx, sb.String())
 	if err != nil {
@@ -377,9 +465,9 @@ func (si *SchemaInductor) centroidEmbedding(engrams []*graph.Engram) []float64 {
 
 func (si *SchemaInductor) buildInductionPrompt(cluster []*graph.Engram) string {
 	var sb strings.Builder
-	sb.WriteString(`You are analyzing a cluster of memory engrams to extract a reusable schema — a pattern template representing what class of event these engrams share.
+	sb.WriteString(`You are extracting a reusable schema from a cluster of memory engrams.
 
-A schema is NOT a summary of what happened. It is a template: what makes instances of this pattern recognizable? What generalizations hold across all instances?
+A schema is a pattern template — what class of event do these engrams represent, and what specific things are reliably true across all instances?
 
 ENGRAMS IN CLUSTER:
 `)
@@ -388,29 +476,29 @@ ENGRAMS IN CLUSTER:
 	}
 
 	sb.WriteString(`
-OUTPUT FORMAT (required sections marked with *):
+Use this exact format. Be concrete and specific — avoid vague generalities.
 
-SCHEMA: *{concise name, 2-5 words}*
-ID: (leave blank — will be assigned)
+SCHEMA: {2-5 word name identifying the pattern type}
 
 PATTERN
-*[1-3 sentence description of the recurring pattern. What makes instances recognizable?]*
+{1-2 sentences. What specific type of event is this? What makes an instance recognizable as belonging to this pattern?}
 
-[Domain-appropriate sections — you decide the headers based on content]
-[Examples: TRIGGER / DIAGNOSIS / FIX / VALIDATION for bug patterns]
-[Or: CONTEXT / DYNAMIC / WHAT WORKS / WHAT FAILS for social patterns]
-[Or: DECISION / CRITERIA / OUTCOME / RETROSPECTIVE for decisions]
+TRIGGERS
+{2-4 concrete conditions that cause this pattern to occur. Be specific, not generic.}
+
+WHAT WORKS
+{2-4 specific approaches or behaviors that lead to good outcomes in this pattern.}
+
+WHAT DOESN'T WORK
+{1-3 specific approaches that lead to poor outcomes. Omit this section if no evidence.}
 
 GENERALIZATIONS
-*[Numbered list of things true across all instances — the insight layer]*
+{3-5 numbered, testable claims true across all instances. Bad: "Communication matters." Good: "Async updates outperform sync calls for this type of decision."}
 
 OPEN QUESTIONS
-[What data would refine or refute this schema? What's still uncertain?]
+{1-3 specific questions whose answers would sharpen or refute this schema.}
 
-ANOMALIES
-[Any instances that matched but behaved unexpectedly]
-
-Output only the schema text. Start directly with "SCHEMA: ".`)
+Output only the schema text. Start with "SCHEMA: ".`)
 
 	return sb.String()
 }
