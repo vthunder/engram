@@ -218,6 +218,7 @@ func buildCompressionPrompt(author string, content string, targetWords int) stri
 	sb.WriteString("- Keep only the essential core meaning\n")
 	sb.WriteString("- Remove ALL filler, small talk, and redundancy\n")
 	sb.WriteString("- Preserve key facts and decisions only\n")
+	sb.WriteString("- Preserve the exact voice, tense, and pronouns from the original — do NOT reframe to third person, do NOT change tense, do NOT replace 'I'/'me' with 'User' or a name\n")
 	sb.WriteString("- CRITICAL: You MUST write ONLY in English - NO Chinese characters allowed\n")
 	sb.WriteString("- If you write ANY Chinese characters (像这样的字符), the output will be REJECTED\n")
 	sb.WriteString("- Use ONLY English words from A-Z - absolutely NO non-English characters\n")
@@ -462,7 +463,7 @@ func (g *DB) GenerateEngramSummaryLevel(engramID string, level int, sourceEpisod
 
 	targetWords := level
 
-	summary, err := compressTraceToTarget(sourceContext, compressor, targetWords, wordCount)
+	summary, err := compressTraceToTarget(sourceContext, compressor, targetWords, wordCount, "")
 	if err != nil {
 		return fmt.Errorf("L%d compression failed: %w", level, err)
 	}
@@ -488,7 +489,7 @@ func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, c
 	sourceContext := strings.Join(contextParts, "\n")
 	wordCount := estimateWordCount(sourceContext)
 
-	l64Summary, err := compressTraceToTarget(sourceContext, compressor, 64, wordCount)
+	l64Summary, err := compressTraceToTarget(sourceContext, compressor, 64, wordCount, "")
 	if err != nil {
 		return fmt.Errorf("L64 compression failed: %w", err)
 	}
@@ -497,7 +498,7 @@ func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, c
 	}
 
 	l64Words := estimateWordCount(l64Summary)
-	l32Summary, err := compressTraceToTarget(l64Summary, compressor, 32, l64Words)
+	l32Summary, err := compressTraceToTarget(l64Summary, compressor, 32, l64Words, "")
 	if err != nil {
 		return fmt.Errorf("L32 compression failed: %w", err)
 	}
@@ -506,7 +507,7 @@ func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, c
 	}
 
 	l32Words := estimateWordCount(l32Summary)
-	l16Summary, err := compressTraceToTarget(l32Summary, compressor, 16, l32Words)
+	l16Summary, err := compressTraceToTarget(l32Summary, compressor, 16, l32Words, "")
 	if err != nil {
 		return fmt.Errorf("L16 compression failed: %w", err)
 	}
@@ -515,7 +516,7 @@ func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, c
 	}
 
 	l16Words := estimateWordCount(l16Summary)
-	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16Words)
+	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16Words, "")
 	if err != nil {
 		return fmt.Errorf("L8 compression failed: %w", err)
 	}
@@ -524,7 +525,7 @@ func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, c
 	}
 
 	l8Words := estimateWordCount(l8Summary)
-	l4Summary, err := compressTraceToTarget(l8Summary, compressor, 4, l8Words)
+	l4Summary, err := compressTraceToTarget(l8Summary, compressor, 4, l8Words, "")
 	if err != nil {
 		return fmt.Errorf("L4 compression failed: %w", err)
 	}
@@ -535,15 +536,16 @@ func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, c
 	return nil
 }
 
-// compressTraceToTarget compresses trace content to target word count or returns verbatim if already below target
-func compressTraceToTarget(content string, compressor Compressor, targetWords int, currentWords int) (string, error) {
+// compressTraceToTarget compresses trace content to target word count or returns verbatim if already below target.
+// botName, if non-empty, is injected into the compression prompt for identity disambiguation.
+func compressTraceToTarget(content string, compressor Compressor, targetWords int, currentWords int, botName string) (string, error) {
 	// If content is already below target, use verbatim text
 	if currentWords <= targetWords {
 		return content, nil
 	}
 
 	// Otherwise compress to target
-	prompt := buildTraceCompressionPrompt(content, targetWords)
+	prompt := buildTraceCompressionPrompt(content, targetWords, botName)
 	summary, err := compressor.Generate(prompt)
 	if err != nil {
 		return "", err
@@ -663,35 +665,35 @@ func (g *DB) GenerateEntityPyramid(entityID string, compressor Compressor) error
 	}
 
 	// Generate cascading pyramid L64→L32→L16→L8→L4
-	l64Summary, err := compressTraceToTarget(sourceContent, compressor, 64, wordCount)
+	l64Summary, err := compressTraceToTarget(sourceContent, compressor, 64, wordCount, "")
 	if err != nil {
 		return fmt.Errorf("L64 entity compression failed: %w", err)
 	}
 	g.AddEntitySummary(entityID, CompressionLevel64, l64Summary, estimateTokens(l64Summary))
 
 	l64Words := estimateWordCount(l64Summary)
-	l32Summary, err := compressTraceToTarget(l64Summary, compressor, 32, l64Words)
+	l32Summary, err := compressTraceToTarget(l64Summary, compressor, 32, l64Words, "")
 	if err != nil {
 		return fmt.Errorf("L32 entity compression failed: %w", err)
 	}
 	g.AddEntitySummary(entityID, CompressionLevel32, l32Summary, estimateTokens(l32Summary))
 
 	l32Words := estimateWordCount(l32Summary)
-	l16Summary, err := compressTraceToTarget(l32Summary, compressor, 16, l32Words)
+	l16Summary, err := compressTraceToTarget(l32Summary, compressor, 16, l32Words, "")
 	if err != nil {
 		return fmt.Errorf("L16 entity compression failed: %w", err)
 	}
 	g.AddEntitySummary(entityID, CompressionLevel16, l16Summary, estimateTokens(l16Summary))
 
 	l16Words := estimateWordCount(l16Summary)
-	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16Words)
+	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16Words, "")
 	if err != nil {
 		return fmt.Errorf("L8 entity compression failed: %w", err)
 	}
 	g.AddEntitySummary(entityID, CompressionLevel8, l8Summary, estimateTokens(l8Summary))
 
 	l8Words := estimateWordCount(l8Summary)
-	l4Summary, err := compressTraceToTarget(l8Summary, compressor, 4, l8Words)
+	l4Summary, err := compressTraceToTarget(l8Summary, compressor, 4, l8Words, "")
 	if err != nil {
 		return fmt.Errorf("L4 entity compression failed: %w", err)
 	}
@@ -700,25 +702,140 @@ func (g *DB) GenerateEntityPyramid(entityID string, compressor Compressor) error
 	return nil
 }
 
-// buildTraceCompressionPrompt constructs a prompt for trace compression to target word count
-func buildTraceCompressionPrompt(content string, targetWords int) string {
-	prompt := fmt.Sprintf(`Compress this conversation into a memory trace summary of %d words or less.
+// GenerateEngramPyramidFromEngrams creates cascading summaries (L64→L32→L16→L8→L4) for an
+// L2+ engram whose "sources" are other engrams (not episodes). Uses the full uncompressed
+// summary of each source engram as the context (analogous to how L1 engrams use full
+// episode content). botName, if non-empty, is injected into compression prompts so the
+// local LLM correctly preserves first-person voice for bot-authored content.
+func (g *DB) GenerateEngramPyramidFromEngrams(engramID string, sourceEngrams []*Engram, compressor Compressor, botName string) error {
+	if compressor == nil || len(sourceEngrams) == 0 {
+		return fmt.Errorf("compressor and source engrams required")
+	}
 
-Rules:
-- Maximum %d words
-- Keep the core meaning
-- Remove filler, small talk, redundancy
-- Preserve key facts and decisions
-- Write in past tense (e.g., "User reported..." not "User reports...")
-- CRITICAL: You MUST write ONLY in English - NO Chinese characters allowed
-- If you write ANY Chinese characters (像这样的字符), the output will be REJECTED
-- Use ONLY English words from A-Z - absolutely NO non-English characters
-- Do NOT include word count, parenthetical annotations like (N words), or any meta-commentary
-- Output ONLY the compressed text - nothing else
+	// Use the full uncompressed summary of each source engram as context
+	var contextParts []string
+	for _, en := range sourceEngrams {
+		if en.Summary != "" {
+			contextParts = append(contextParts, en.Summary)
+		}
+	}
 
-Source conversation:
-%s
+	sourceContext := strings.Join(contextParts, "\n---\n")
+	wordCount := estimateWordCount(sourceContext)
 
-Compressed summary:`, targetWords, targetWords, content)
-	return prompt
+	l64Summary, err := compressTraceToTarget(sourceContext, compressor, 64, wordCount, botName)
+	if err != nil {
+		return fmt.Errorf("L64 compression failed: %w", err)
+	}
+	if err := g.AddEngramSummary(engramID, CompressionLevel64, l64Summary, estimateTokens(l64Summary)); err != nil {
+		return fmt.Errorf("failed to store L64 summary: %w", err)
+	}
+
+	l64Words := estimateWordCount(l64Summary)
+	l32Summary, err := compressTraceToTarget(l64Summary, compressor, 32, l64Words, botName)
+	if err != nil {
+		return fmt.Errorf("L32 compression failed: %w", err)
+	}
+	if err := g.AddEngramSummary(engramID, CompressionLevel32, l32Summary, estimateTokens(l32Summary)); err != nil {
+		return fmt.Errorf("failed to store L32 summary: %w", err)
+	}
+
+	l32Words := estimateWordCount(l32Summary)
+	l16Summary, err := compressTraceToTarget(l32Summary, compressor, 16, l32Words, botName)
+	if err != nil {
+		return fmt.Errorf("L16 compression failed: %w", err)
+	}
+	if err := g.AddEngramSummary(engramID, CompressionLevel16, l16Summary, estimateTokens(l16Summary)); err != nil {
+		return fmt.Errorf("failed to store L16 summary: %w", err)
+	}
+
+	l16Words := estimateWordCount(l16Summary)
+	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16Words, botName)
+	if err != nil {
+		return fmt.Errorf("L8 compression failed: %w", err)
+	}
+	if err := g.AddEngramSummary(engramID, CompressionLevel8, l8Summary, estimateTokens(l8Summary)); err != nil {
+		return fmt.Errorf("failed to store L8 summary: %w", err)
+	}
+
+	l8Words := estimateWordCount(l8Summary)
+	l4Summary, err := compressTraceToTarget(l8Summary, compressor, 4, l8Words, botName)
+	if err != nil {
+		return fmt.Errorf("L4 compression failed: %w", err)
+	}
+	if err := g.AddEngramSummary(engramID, CompressionLevel4, l4Summary, estimateTokens(l4Summary)); err != nil {
+		return fmt.Errorf("failed to store L4 summary: %w", err)
+	}
+
+	return nil
+}
+
+// RegenerateEngramPyramid regenerates pyramid summaries (L4–L64) for a single engram using
+// the current compression prompts. For L1 engrams (depth=0), rebuilds from source episodes;
+// for L2+ engrams, rebuilds from source engrams. The L0 (verbatim) summary is preserved.
+// Existing L4–L64 summaries are overwritten via upsert.
+func (g *DB) RegenerateEngramPyramid(engramID string, compressor Compressor, botName string) error {
+	if compressor == nil {
+		return fmt.Errorf("compressor required")
+	}
+
+	en, err := g.GetEngram(engramID)
+	if err != nil || en == nil {
+		return fmt.Errorf("engram not found: %s", engramID)
+	}
+
+	if en.Depth == 0 {
+		// L1: rebuild from source episodes
+		sourceIDs, err := g.GetEngramSources(engramID)
+		if err != nil {
+			return fmt.Errorf("failed to get source episode IDs: %w", err)
+		}
+		if len(sourceIDs) == 0 {
+			return fmt.Errorf("engram %s has no source episodes", engramID)
+		}
+		episodes, err := g.GetEpisodes(sourceIDs)
+		if err != nil {
+			return fmt.Errorf("failed to fetch source episodes: %w", err)
+		}
+		if len(episodes) == 0 {
+			return fmt.Errorf("engram %s: source episodes not found", engramID)
+		}
+		return g.GenerateEngramPyramid(engramID, episodes, compressor)
+	}
+
+	// L2+: rebuild from source engrams
+	sourceEngrams, err := g.GetEngramChildren(engramID)
+	if err != nil {
+		return fmt.Errorf("failed to get source engrams: %w", err)
+	}
+	if len(sourceEngrams) == 0 {
+		return fmt.Errorf("engram %s has no source engrams", engramID)
+	}
+	return g.GenerateEngramPyramidFromEngrams(engramID, sourceEngrams, compressor, botName)
+}
+
+// buildTraceCompressionPrompt constructs a prompt for trace compression to target word count.
+// botName, if non-empty, injects an identity clarification so the compressor knows "I"/"me" refer
+// to the bot (not the user) when compressing first-person bot summaries.
+func buildTraceCompressionPrompt(content string, targetWords int, botName string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Compress this into a memory summary of %d words or less.\n\n", targetWords))
+	sb.WriteString("Rules:\n")
+	sb.WriteString(fmt.Sprintf("- Maximum %d words\n", targetWords))
+	sb.WriteString("- Keep the core meaning\n")
+	sb.WriteString("- Remove filler, small talk, redundancy\n")
+	sb.WriteString("- Preserve key facts and decisions\n")
+	if botName != "" {
+		sb.WriteString(fmt.Sprintf("- Identity: \"I\", \"me\", and \"my\" refer to %s (the AI assistant) — NOT to the user or owner. Preserve first-person voice when referring to %s.\n", botName, botName))
+	}
+	sb.WriteString("- Preserve the exact voice, tense, and pronouns from the source — first person stays first person, tense is unchanged, 'I'/'me'/'my' must not become 'User' or a name\n")
+	sb.WriteString("- CRITICAL: You MUST write ONLY in English - NO Chinese characters allowed\n")
+	sb.WriteString("- If you write ANY Chinese characters (像这样的字符), the output will be REJECTED\n")
+	sb.WriteString("- Use ONLY English words from A-Z - absolutely NO non-English characters\n")
+	sb.WriteString("- Do NOT include word count, parenthetical annotations like (N words), or any meta-commentary\n")
+	sb.WriteString("- Output ONLY the compressed text - nothing else\n")
+	sb.WriteString("\nSource:\n")
+	sb.WriteString(content)
+	sb.WriteString("\n\nCompressed summary:")
+	return sb.String()
 }

@@ -47,6 +47,10 @@ type Consolidator struct {
 
 	// Incremental mode: only infer edges for windows with new episodes
 	IncrementalMode bool
+
+	// NewEngramHook is called asynchronously after each new L1 engram is created.
+	// Used for forward schema matching. Set from main.go to avoid import cycles.
+	NewEngramHook func(engram *graph.Engram)
 }
 
 // NewConsolidator creates a new consolidator
@@ -595,6 +599,12 @@ func (c *Consolidator) consolidateGroup(group *episodeGroup, index int) error {
 
 	if err := c.graph.AddEngram(engram); err != nil {
 		return fmt.Errorf("failed to add trace: %w", err)
+	}
+
+	// Fire the new-engram hook asynchronously (used by forward schema matcher).
+	if c.NewEngramHook != nil {
+		hook := c.NewEngramHook
+		go hook(engram)
 	}
 
 	// Mark engram as labile for 24 hours: new related episodes extend it via reconsolidation.

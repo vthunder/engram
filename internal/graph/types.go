@@ -44,11 +44,12 @@ const (
 	EdgeHasPet      EdgeType = "HAS_PET"
 
 	// Engram edges
-	EdgeSourcedFrom   EdgeType = "SOURCED_FROM"
-	EdgeInvolves      EdgeType = "INVOLVES"
-	EdgeInvalidatedBy EdgeType = "INVALIDATED_BY"
-	EdgeSharedEntity  EdgeType = "SHARED_ENTITY"
-	EdgeSimilarTo     EdgeType = "SIMILAR_TO" // Semantic similarity above threshold (0.85+)
+	EdgeSourcedFrom       EdgeType = "SOURCED_FROM"
+	EdgeInvolves          EdgeType = "INVOLVES"
+	EdgeInvalidatedBy     EdgeType = "INVALIDATED_BY"
+	EdgeSharedEntity      EdgeType = "SHARED_ENTITY"
+	EdgeSimilarTo         EdgeType = "SIMILAR_TO"         // Semantic similarity above threshold (0.85+)
+	EdgeConsolidatedFrom  EdgeType = "CONSOLIDATED_FROM"  // Higher-depth engram → source engrams
 )
 
 // EntityType defines categories of entities (OntoNotes-compatible schema)
@@ -134,6 +135,7 @@ type Engram struct {
 	ID         string     `json:"id"`
 	Summary    string     `json:"summary"`
 	Level      int        `json:"level,omitempty"` // Compression level applied (0 = stored summary)
+	Depth      int        `json:"depth,omitempty"` // Hierarchy depth: 0 = L1 (from episodes), 1 = L2 (from L1s), etc.
 	Topic      string     `json:"topic,omitempty"`
 	EngramType EngramType `json:"engram_type,omitempty"`
 	Activation float64    `json:"activation"`
@@ -147,6 +149,32 @@ type Engram struct {
 	// Related data (populated on retrieval)
 	SourceIDs []string `json:"source_ids,omitempty"`
 	EntityIDs []string `json:"entity_ids,omitempty"`
+	SchemaIDs []string `json:"schema_ids,omitempty"`
+}
+
+// Schema represents a cross-cutting pattern template extracted from L2+ engrams.
+// A schema is not a summary of what happened — it's a template for what class of
+// event this is, with generalizations extracted from multiple instances.
+type Schema struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Content   string    `json:"content"`   // full semi-structured prose (PATTERN, GENERALIZATIONS, etc.)
+	Embedding []float64 `json:"embedding,omitempty"`
+	IsLabile  bool      `json:"is_labile,omitempty"` // true = needs reconsolidation at next induction run
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// Populated on retrieval
+	Instances []SchemaInstance `json:"instances,omitempty"`
+}
+
+// SchemaInstance records that an engram matches a schema, with extracted slot values.
+type SchemaInstance struct {
+	SchemaID   string            `json:"schema_id"`
+	EngramID   string            `json:"engram_id"`
+	SlotValues map[string]string `json:"slot_values,omitempty"` // JSON: {"trigger": "...", "fix": "..."}
+	IsAnomaly  bool              `json:"is_anomaly"`
+	MatchedAt  time.Time         `json:"matched_at"`
 }
 
 // Edge represents a relationship between nodes

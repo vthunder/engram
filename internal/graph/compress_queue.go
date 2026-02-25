@@ -39,6 +39,11 @@ func NewEpisodeCompressQueue(db *DB, compressor Compressor, logger *slog.Logger)
 	return q
 }
 
+// Compressor returns the compressor used by this queue.
+func (q *EpisodeCompressQueue) Compressor() Compressor {
+	return q.compressor
+}
+
 // Enqueue adds an episode ID to the compression queue without blocking.
 // If the queue is full the ID is dropped and needsScan is set so the
 // background scan will catch it.

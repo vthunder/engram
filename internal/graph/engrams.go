@@ -38,8 +38,8 @@ func (g *DB) AddEngram(en *Engram) error {
 
 	_, err = g.db.Exec(`
 		INSERT INTO engrams (id, topic, engram_type, activation, strength,
-			embedding, event_time, created_at, last_accessed, labile_until)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			embedding, event_time, created_at, last_accessed, labile_until, depth)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			engram_type = excluded.engram_type,
 			activation = excluded.activation,
@@ -47,10 +47,11 @@ func (g *DB) AddEngram(en *Engram) error {
 			embedding = excluded.embedding,
 			event_time = excluded.event_time,
 			last_accessed = excluded.last_accessed,
-			labile_until = excluded.labile_until
+			labile_until = excluded.labile_until,
+			depth = excluded.depth
 	`,
 		en.ID, en.Topic, string(engramType), en.Activation, en.Strength,
-		embeddingBytes, en.EventTime, en.CreatedAt, en.LastAccessed, nullableTime(en.LabileUntil),
+		embeddingBytes, en.EventTime, en.CreatedAt, en.LastAccessed, nullableTime(en.LabileUntil), en.Depth,
 	)
 
 	if err != nil {
@@ -91,7 +92,8 @@ func (g *DB) GetEngram(id string) (*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.id = ?
 	`, id)
@@ -113,7 +115,8 @@ func (g *DB) GetActivatedEngrams(threshold float64, limit int) ([]*Engram, error
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.activation >= ?
 		ORDER BY e.activation DESC
@@ -159,7 +162,8 @@ func (g *DB) GetEngramsBatch(ids []string) (map[string]*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.id IN (`+string(placeholders)+`)
 	`, args...)
@@ -208,7 +212,8 @@ func (g *DB) GetEngramsBatchAtLevel(ids []string, level int) (map[string]*Engram
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.id IN (`+string(placeholders)+`)
 	`, args...)
@@ -240,7 +245,8 @@ func (g *DB) GetActivatedEngramsWithLevel(threshold float64, limit, level int) (
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.activation >= ?
 		ORDER BY e.activation DESC
@@ -707,7 +713,8 @@ func (g *DB) GetAllEngrams() ([]*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			COALESCE(e.depth, 0)
 		FROM engrams e
 		ORDER BY e.created_at DESC
 	`)
@@ -761,6 +768,7 @@ func scanEngram(row *sql.Row) (*Engram, error) {
 	err := row.Scan(
 		&en.ID, &summary, &topic, &engramType, &en.Activation, &en.Strength,
 		&embeddingBytes, &eventTime, &en.CreatedAt, &en.LastAccessed, &labileUntil,
+		&en.Depth,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -804,6 +812,7 @@ func scanEngramRows(rows *sql.Rows) ([]*Engram, error) {
 		err := rows.Scan(
 			&en.ID, &summary, &topic, &engramType, &en.Activation, &en.Strength,
 			&embeddingBytes, &eventTime, &en.CreatedAt, &en.LastAccessed, &labileUntil,
+			&en.Depth,
 		)
 		if err != nil {
 			continue
@@ -829,6 +838,81 @@ func scanEngramRows(rows *sql.Rows) ([]*Engram, error) {
 		engrams = append(engrams, &en)
 	}
 	return engrams, nil
+}
+
+// GetUngroupedEngrams returns engrams at the given depth that have no CONSOLIDATED_FROM
+// edge pointing to them — i.e., they haven't been grouped into a higher-depth engram yet.
+func (g *DB) GetUngroupedEngrams(depth int) ([]*Engram, error) {
+	rows, err := g.db.Query(`
+		SELECT e.id,
+			COALESCE(
+				(SELECT summary FROM engram_summaries WHERE engram_id = e.id AND compression_level = 0 LIMIT 1),
+				(SELECT summary FROM engram_summaries WHERE engram_id = e.id AND compression_level = 64 LIMIT 1),
+				(SELECT summary FROM engram_summaries WHERE engram_id = e.id AND compression_level = 32 LIMIT 1),
+				(SELECT summary FROM engram_summaries WHERE engram_id = e.id AND compression_level = 16 LIMIT 1),
+				(SELECT summary FROM engram_summaries WHERE engram_id = e.id AND compression_level = 8 LIMIT 1),
+				(SELECT summary FROM engram_summaries WHERE engram_id = e.id AND compression_level = 4 LIMIT 1),
+				e.summary,
+				''
+			) as summary,
+			e.topic, e.engram_type,
+			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			COALESCE(e.depth, 0)
+		FROM engrams e
+		WHERE COALESCE(e.depth, 0) = ?
+		AND NOT EXISTS (
+			SELECT 1 FROM engram_relations er
+			WHERE er.to_id = e.id
+			AND er.relation_type = 'CONSOLIDATED_FROM'
+		)
+		ORDER BY e.created_at ASC
+	`, depth)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query ungrouped engrams at depth %d: %w", depth, err)
+	}
+	defer rows.Close()
+	return scanEngramRows(rows)
+}
+
+// GetEngramChildren returns the source engrams for an L2+ engram (via CONSOLIDATED_FROM edges).
+// For L1 engrams (depth=0), use GetEngramSources to get source episodes instead.
+func (g *DB) GetEngramChildren(engramID string) ([]*Engram, error) {
+	// Find engram IDs linked as sources via CONSOLIDATED_FROM
+	rows, err := g.db.Query(`
+		SELECT to_id FROM engram_relations
+		WHERE from_id = ? AND relation_type = 'CONSOLIDATED_FROM'
+	`, engramID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var childIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		childIDs = append(childIDs, id)
+	}
+	rows.Close()
+
+	if len(childIDs) == 0 {
+		return nil, nil
+	}
+
+	engramMap, err := g.GetEngramsBatch(childIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*Engram, 0, len(childIDs))
+	for _, id := range childIDs {
+		if en, ok := engramMap[id]; ok && en != nil {
+			result = append(result, en)
+		}
+	}
+	return result, nil
 }
 
 // nullableTime converts a time.Time to sql.NullTime
@@ -883,6 +967,7 @@ func (g *DB) UpdateEngramLabileUntil(engramID string, labileUntil time.Time) err
 
 // UpdateEngram updates an engram's summary, embedding, type, strength, and event_time after reconsolidation.
 // eventTime should be MAX(timestamp_event) of all current source episodes.
+// Records the new summary in engram_schema_instances as an audit trail entry.
 func (g *DB) UpdateEngram(engramID, summary string, embedding []float64, engramType EngramType, strength int, eventTime time.Time) error {
 	embeddingJSON, err := json.Marshal(embedding)
 	if err != nil {
@@ -891,12 +976,16 @@ func (g *DB) UpdateEngram(engramID, summary string, embedding []float64, engramT
 
 	_, err = g.db.Exec(`
 		UPDATE engrams
-		SET summary = ?, embedding = ?, engram_type = ?, strength = ?, event_time = ?, last_accessed = CURRENT_TIMESTAMP
+		SET summary = ?, embedding = ?, engram_type = ?, strength = ?, event_time = ?,
+		    last_accessed = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, summary, embeddingJSON, engramType, strength, eventTime, engramID)
 	if err != nil {
 		return err
 	}
+
+	// Record schema instance for audit trail.
+	g.db.Exec(`INSERT INTO engram_schema_instances (engram_id, summary) VALUES (?, ?)`, engramID, summary)
 
 	if g.vecAvailable && len(embedding) > 0 && g.vecDim == len(embedding) {
 		g.syncEngramToVec(engramID, embedding)

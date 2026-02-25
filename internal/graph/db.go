@@ -990,6 +990,90 @@ func (g *DB) runMigrations() error {
 		log.Println("[graph] Migration to v24 completed: engrams.event_time")
 	}
 
+	// Migration v25: Add depth column for recursive engram hierarchy.
+	// depth=0: L1 engrams consolidated from episodes (current default).
+	// depth=1: L2 engrams consolidated from L1 engrams.
+	// depth=N: LN+1 engrams consolidated from LN engrams.
+	if version < 25 {
+		g.db.Exec(`ALTER TABLE engrams ADD COLUMN depth INTEGER NOT NULL DEFAULT 0`)
+		g.db.Exec(`CREATE INDEX IF NOT EXISTS idx_engrams_depth ON engrams(depth)`)
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (25)")
+		log.Println("[graph] Migration to v25 completed: engrams.depth column added")
+	}
+
+	// Migration v26: Schema versioning for engram reconsolidation.
+	// - updated_at tracks when an engram was last reconsolidated.
+	// - engram_schema_instances is an audit trail of summary history.
+	if version < 26 {
+		stmts := []string{
+			`ALTER TABLE engrams ADD COLUMN updated_at DATETIME`,
+			// Backfill: treat last_accessed as the last update time for existing engrams.
+			`UPDATE engrams SET updated_at = last_accessed WHERE updated_at IS NULL`,
+			`CREATE TABLE IF NOT EXISTS engram_schema_instances (
+				id         INTEGER PRIMARY KEY AUTOINCREMENT,
+				engram_id  TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+				summary    TEXT NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_schema_instances_engram ON engram_schema_instances(engram_id)`,
+		}
+		for _, sql := range stmts {
+			if _, err := g.db.Exec(sql); err != nil {
+				log.Printf("[graph] Migration v26 (non-fatal): %v", err)
+			}
+		}
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (26)")
+		log.Println("[graph] Migration to v26 completed: engram schema versioning")
+	}
+
+	// Migration v27: Schema Formation (Phase 2).
+	// Adds schemas, schema_instances, and schema_annotations tables.
+	// Schemas are cross-cutting pattern templates extracted from L2+ engrams.
+	if version < 27 {
+		stmts := []string{
+			// Schemas: cross-cutting pattern templates
+			`CREATE TABLE IF NOT EXISTS schemas (
+				id          TEXT PRIMARY KEY,
+				name        TEXT NOT NULL,
+				content     TEXT NOT NULL,
+				embedding   BLOB,
+				is_labile   INTEGER DEFAULT 0,
+				created_at  DATETIME NOT NULL,
+				updated_at  DATETIME NOT NULL
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_schemas_name ON schemas(name)`,
+			`CREATE INDEX IF NOT EXISTS idx_schemas_updated ON schemas(updated_at)`,
+
+			// Schema instances: engram → schema match records
+			`CREATE TABLE IF NOT EXISTS schema_instances (
+				schema_id   TEXT NOT NULL REFERENCES schemas(id) ON DELETE CASCADE,
+				engram_id   TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+				slot_values TEXT,
+				is_anomaly  INTEGER DEFAULT 0,
+				matched_at  DATETIME NOT NULL,
+				PRIMARY KEY (schema_id, engram_id)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_schema_instances_schema ON schema_instances(schema_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_schema_instances_engram ON schema_instances(engram_id)`,
+
+			// Schema annotations: denormalized engram → schema for fast lookup
+			`CREATE TABLE IF NOT EXISTS schema_annotations (
+				engram_id   TEXT NOT NULL REFERENCES engrams(id) ON DELETE CASCADE,
+				schema_id   TEXT NOT NULL REFERENCES schemas(id) ON DELETE CASCADE,
+				PRIMARY KEY (engram_id, schema_id)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_schema_annotations_engram ON schema_annotations(engram_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_schema_annotations_schema ON schema_annotations(schema_id)`,
+		}
+		for _, sql := range stmts {
+			if _, err := g.db.Exec(sql); err != nil {
+				log.Printf("[graph] Migration v27 error: %v", err)
+			}
+		}
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (27)")
+		log.Println("[graph] Migration to v27 completed: schema formation tables added")
+	}
+
 	return nil
 }
 

@@ -29,6 +29,16 @@ func GenerateEngramID(content string, createdAtNs int64) string {
 	return fmt.Sprintf("%x", sum[:16])
 }
 
+// GenerateSchemaID returns a 32-char BLAKE3 hex ID for a schema.
+func GenerateSchemaID(name string, createdAtNs int64) string {
+	h := blake3.New()
+	h.Write([]byte("schema:"))
+	h.Write([]byte(name))
+	h.Write([]byte(strconv.FormatInt(createdAtNs, 10)))
+	sum := h.Sum(nil)
+	return fmt.Sprintf("%x", sum[:16])
+}
+
 // ResolveID resolves a full or prefix ID against the given table.
 // Prefix must be at least 5 characters. Returns the full 32-char ID or an error.
 func ResolveID(db *sql.DB, table, prefix string) (string, error) {
