@@ -149,6 +149,13 @@ func (si *SchemaInductor) induceNewSchema(ctx context.Context, cluster []*graph.
 		return 0, fmt.Errorf("LLM induction failed: %w", err)
 	}
 
+	// Check for SKIP response (cluster is not a recurring pattern)
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(strings.ToUpper(trimmed), "SKIP:") {
+		log.Printf("[schema-inductor] cluster skipped (not a recurring pattern): %s", trimmed)
+		return 0, nil
+	}
+
 	name, content, err := parseSchemaOutput(raw)
 	if err != nil {
 		log.Printf("[schema-inductor] failed to parse schema output: %v", err)
@@ -342,13 +349,17 @@ Rules:
 - Create %d–%d clusters (aim for %d)
 - Each engram belongs to exactly one cluster
 - Group by what TYPE of activity happened, not what subject area it belongs to
+- Each cluster must represent an activity that occurs REPEATEDLY over time (at least monthly), not a single project or incident
+- If engrams don't share a clear recurring activity type, assign them cluster_id -1 (noise — they will be discarded)
+- Do NOT force unrelated engrams into a cluster just to fill quota
 - Do NOT create clusters that would produce overlapping schemas
 - Clusters with fewer than %d engrams will be discarded — still assign them
 
 Output JSON only, no other text:
 [
   {"cluster_id": 0, "label": "short activity-type label", "indices": [0, 3, 7]},
-  {"cluster_id": 1, "label": "short activity-type label", "indices": [1, 2, 5, 6]}
+  {"cluster_id": 1, "label": "short activity-type label", "indices": [1, 2, 5, 6]},
+  {"cluster_id": -1, "label": "noise", "indices": [4, 8]}
 ]`, minClusters, maxClusters, (minClusters+maxClusters)/2, si.MinClusterSize))
 
 	raw, err := si.llm.Generate(ctx, sb.String())
@@ -369,6 +380,13 @@ Output JSON only, no other text:
 
 	result := make([][]*graph.Engram, 0, len(clusterDefs))
 	for _, cd := range clusterDefs {
+		// cluster_id -1 is the noise bucket — skip it
+		if cd.ClusterID < 0 {
+			if si.verbose {
+				log.Printf("[schema-inductor] discarding %d noise engrams", len(cd.Indices))
+			}
+			continue
+		}
 		cluster := make([]*graph.Engram, 0, len(cd.Indices))
 		for _, idx := range cd.Indices {
 			if idx >= 0 && idx < len(engrams) {
@@ -490,6 +508,10 @@ func (si *SchemaInductor) buildInductionPrompt(cluster []*graph.Engram) string {
 	sb.WriteString(`You are extracting a reusable schema from a cluster of memory engrams.
 
 A schema is a compact pattern template capturing what is reliably true across a recurring type of activity.
+
+FIRST: Assess whether this cluster is schema-worthy. Ask: "Is this a genuinely recurring activity type — something that happens repeatedly over time, not a single project or incident?"
+- If NO (e.g., these engrams all describe the same one-time project or event), respond with exactly: SKIP: [one sentence explaining why]
+- If YES, proceed to generate the schema below.
 
 ENGRAMS IN CLUSTER:
 `)
