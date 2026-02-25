@@ -194,7 +194,26 @@ func (si *SchemaInductor) induceNewSchema(ctx context.Context, cluster []*graph.
 
 // reconsolidateSchema re-runs induction on a labile schema with fresh cluster data.
 func (si *SchemaInductor) reconsolidateSchema(ctx context.Context, s *graph.Schema, cluster []*graph.Engram) (int, error) {
-	prompt := si.buildReconsolidationPrompt(s, cluster)
+	// Fetch anomalous instances that triggered reconsolidation so the prompt
+	// can explain what was unexpected rather than just passing raw cluster data.
+	var anomalousEngrams []*graph.Engram
+	if instances, err := si.graph.GetSchemaInstances(s.ID); err == nil {
+		var anomalyIDs []string
+		for _, inst := range instances {
+			if inst.IsAnomaly {
+				anomalyIDs = append(anomalyIDs, inst.EngramID)
+			}
+		}
+		if len(anomalyIDs) > 0 {
+			if engrams, err := si.graph.GetEngramsBatch(anomalyIDs); err == nil {
+				for _, en := range engrams {
+					anomalousEngrams = append(anomalousEngrams, en)
+				}
+			}
+		}
+	}
+
+	prompt := si.buildReconsolidationPrompt(s, cluster, anomalousEngrams)
 
 	raw, err := si.llm.Generate(ctx, prompt)
 	if err != nil {
@@ -503,22 +522,39 @@ Output only the schema text. Start with "SCHEMA: ".`)
 	return sb.String()
 }
 
-func (si *SchemaInductor) buildReconsolidationPrompt(s *graph.Schema, newInstances []*graph.Engram) string {
+func (si *SchemaInductor) buildReconsolidationPrompt(s *graph.Schema, cluster []*graph.Engram, anomalies []*graph.Engram) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(`You are updating an existing memory schema with new instances.
+	sb.WriteString(fmt.Sprintf(`You are updating an existing memory schema.
 
 EXISTING SCHEMA:
 %s
 
-NEW INSTANCES TO INCORPORATE:
 `, s.Content))
 
-	for i, en := range newInstances {
-		sb.WriteString(fmt.Sprintf("\n[%d] %s\n", i+1, en.Summary))
+	if len(anomalies) > 0 {
+		sb.WriteString("ANOMALOUS INSTANCES (matched the schema but behaved unexpectedly — these triggered this update):\n")
+		for i, en := range anomalies {
+			sb.WriteString(fmt.Sprintf("[anomaly %d] %s\n", i+1, en.Summary))
+		}
+		sb.WriteString("\n")
 	}
 
-	sb.WriteString(`
-Update the schema to incorporate insights from the new instances. Preserve the existing structure but refine GENERALIZATIONS and add ANOMALIES if warranted.
+	if len(cluster) > 0 {
+		sb.WriteString("RECENT INSTANCES:\n")
+		for i, en := range cluster {
+			sb.WriteString(fmt.Sprintf("[%d] %s\n", i+1, en.Summary))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(`Update the schema based on the evidence above. The schema uses these sections:
+TRIGGERS: What activates or initiates this pattern
+WHAT WORKS: Reliable successful approaches
+WHAT DOESN'T WORK: Known failures, pitfalls, edge cases
+GENERALIZATIONS: Distilled lessons that hold broadly
+OPEN QUESTIONS: Unresolved uncertainties to investigate
+
+If anomalous instances reveal edge cases or failure modes, incorporate them into WHAT DOESN'T WORK or OPEN QUESTIONS. If anomalies are common enough to be their own pattern, expand WHAT WORKS / WHAT DOESN'T WORK accordingly. Do NOT list individual anomalies verbatim — synthesize what they tell you about the pattern's limits.
 
 Output the complete updated schema. Start with "SCHEMA: ".`)
 
