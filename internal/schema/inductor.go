@@ -325,11 +325,14 @@ func (si *SchemaInductor) clusterByLLM(ctx context.Context, engrams []*graph.Eng
 	}
 
 	var sb strings.Builder
-	sb.WriteString("You are clustering memory engrams into distinct thematic groups for schema induction.\n\n")
-	sb.WriteString("Each cluster will become a reusable pattern template. Good clusters are:\n")
-	sb.WriteString("- DISTINCT: no two clusters should overlap in meaning\n")
-	sb.WriteString("- COHESIVE: engrams in a cluster share a specific recurring pattern\n")
-	sb.WriteString("- CONCRETE: named by the type of event, not vague labels like 'work tasks'\n\n")
+	sb.WriteString("You are clustering memory engrams by recurring activity type for schema induction.\n\n")
+	sb.WriteString("GOAL: Each cluster should represent one specific, recurring type of activity or event — not a broad subject area.\n\n")
+	sb.WriteString("Good cluster examples: \"daily standup meeting\", \"debugging a production issue\", \"code review session\", \"1:1 with manager\"\n")
+	sb.WriteString("Bad cluster examples: \"work\", \"engineering\", \"meetings\", \"problems\" (too broad/domain-based)\n\n")
+	sb.WriteString("A good cluster:\n")
+	sb.WriteString("- Groups engrams that describe the SAME TYPE of recurring event or workflow\n")
+	sb.WriteString("- Has a label you could use to answer \"what kind of thing was this?\" in 2-4 words\n")
+	sb.WriteString("- Is distinct enough that another cluster couldn't absorb it\n\n")
 	sb.WriteString("ENGRAMS:\n")
 	for i, en := range engrams {
 		sb.WriteString(fmt.Sprintf("[%d] %s\n", i, en.Summary))
@@ -338,14 +341,14 @@ func (si *SchemaInductor) clusterByLLM(ctx context.Context, engrams []*graph.Eng
 Rules:
 - Create %d–%d clusters (aim for %d)
 - Each engram belongs to exactly one cluster
-- If two engrams represent similar events, they go in the same cluster
+- Group by what TYPE of activity happened, not what subject area it belongs to
 - Do NOT create clusters that would produce overlapping schemas
 - Clusters with fewer than %d engrams will be discarded — still assign them
 
 Output JSON only, no other text:
 [
-  {"cluster_id": 0, "label": "short label", "indices": [0, 3, 7]},
-  {"cluster_id": 1, "label": "short label", "indices": [1, 2, 5, 6]}
+  {"cluster_id": 0, "label": "short activity-type label", "indices": [0, 3, 7]},
+  {"cluster_id": 1, "label": "short activity-type label", "indices": [1, 2, 5, 6]}
 ]`, minClusters, maxClusters, (minClusters+maxClusters)/2, si.MinClusterSize))
 
 	raw, err := si.llm.Generate(ctx, sb.String())
@@ -486,7 +489,7 @@ func (si *SchemaInductor) buildInductionPrompt(cluster []*graph.Engram) string {
 	var sb strings.Builder
 	sb.WriteString(`You are extracting a reusable schema from a cluster of memory engrams.
 
-A schema is a pattern template — what class of event do these engrams represent, and what specific things are reliably true across all instances?
+A schema is a compact pattern template capturing what is reliably true across a recurring type of activity.
 
 ENGRAMS IN CLUSTER:
 `)
@@ -495,27 +498,32 @@ ENGRAMS IN CLUSTER:
 	}
 
 	sb.WriteString(`
-Use this exact format. Be concrete and specific — avoid vague generalities.
+Use this exact format. Strict length limits apply — cut anything that doesn't add new information.
 
-SCHEMA: {2-5 word name identifying the pattern type}
+SCHEMA: {2-5 word name for the activity type, e.g. "Production Incident Response"}
 
 PATTERN
-{1-2 sentences. What specific type of event is this? What makes an instance recognizable as belonging to this pattern?}
+{Exactly 1-2 sentences. Name the specific recurring activity type. What makes an instance instantly recognizable? NO vague adjectives.}
 
 TRIGGERS
-{2-4 concrete conditions that cause this pattern to occur. Be specific, not generic.}
+{Exactly 2-3 bullet points. Concrete preconditions — not "a problem occurs" but what specific signal starts this activity.}
 
 WHAT WORKS
-{2-4 specific approaches or behaviors that lead to good outcomes in this pattern.}
+{Exactly 2-3 bullet points. Specific actions or approaches with observable good outcomes. Max 15 words each.}
 
 WHAT DOESN'T WORK
-{1-3 specific approaches that lead to poor outcomes. Omit this section if no evidence.}
+{1-2 bullet points, or omit if no evidence. Specific failure modes, not generic warnings.}
 
 GENERALIZATIONS
-{3-5 numbered, testable claims true across all instances. Bad: "Communication matters." Good: "Async updates outperform sync calls for this type of decision."}
+{Exactly 3 numbered claims. Each must be falsifiable and ≤ 20 words. Bad: "Communication is important." Good: "Parallel debugging cuts resolution time vs sequential hypothesis testing."}
 
 OPEN QUESTIONS
-{1-3 specific questions whose answers would sharpen or refute this schema.}
+{Exactly 1-2 questions that would most sharpen or refute this schema if answered.}
+
+Quality rules:
+- Every bullet point must be specific to THIS activity type, not generic advice
+- If a claim would apply to any knowledge work, delete it
+- Prefer concrete nouns and verbs; ban "effectively", "properly", "important", "relevant"
 
 Output only the schema text. Start with "SCHEMA: ".`)
 
