@@ -1,11 +1,12 @@
 import { api } from "./client";
-import type { Engram, EngramCard, EngramContext } from "./types";
+import type { Engram, EngramCard, EngramContext, EngramChildrenResponse } from "./types";
 
 export function listEngrams(params?: {
   threshold?: number;
   limit?: number;
   detail?: boolean;
   level?: number;
+  depth?: number;
 }): Promise<Engram[] | EngramCard[]> {
   const q = new URLSearchParams();
   if (params?.threshold !== undefined)
@@ -13,6 +14,8 @@ export function listEngrams(params?: {
   if (params?.limit !== undefined) q.set("limit", String(params.limit));
   if (params?.detail) q.set("detail", "full");
   if (params?.level) q.set("level", String(params.level));
+  if (params?.depth !== undefined && params.depth >= 0)
+    q.set("depth", String(params.depth));
   const qs = q.toString();
   return api.get(`/v1/engrams${qs ? `?${qs}` : ""}`);
 }
@@ -46,6 +49,13 @@ export function searchEngrams(
     detail: detail ? "full" : undefined,
     level: level > 0 ? level : undefined,
   });
+}
+
+export function getEngramChildren(id: string, level = 0): Promise<EngramChildrenResponse> {
+  const q = new URLSearchParams();
+  if (level > 0) q.set("level", String(level));
+  const qs = q.toString();
+  return api.get(`/v1/engrams/${id}/children${qs ? `?${qs}` : ""}`);
 }
 
 export function deleteEngram(id: string): Promise<void> {

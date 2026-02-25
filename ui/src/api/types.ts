@@ -28,6 +28,7 @@ export interface Engram {
   id: string;
   summary: string;
   level?: number;
+  depth?: number;
   topic?: string;
   engram_type?: EngramType;
   activation: number;
@@ -96,8 +97,33 @@ export interface EngramContext {
   linked_entities: Entity[];
 }
 
+export interface EngramChildrenResponse {
+  engram_id: string;
+  depth: number;
+  type: "engrams" | "episodes";
+  children: (Engram | Episode)[];
+}
+
 export interface EpisodeCountResponse {
   count: number;
+}
+
+export interface SchemaInstance {
+  schema_id: string;
+  engram_id: string;
+  slot_values?: Record<string, string>;
+  is_anomaly: boolean;
+  matched_at: string;
+}
+
+export interface Schema {
+  id: string;
+  name: string;
+  content: string;
+  is_labile?: boolean;
+  created_at: string;
+  updated_at: string;
+  instances?: SchemaInstance[];
 }
 
 export interface ConsolidateResponse {
