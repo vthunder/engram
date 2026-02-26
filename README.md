@@ -25,19 +25,22 @@ Engram is grounded in the [Synapse](https://arxiv.org/abs/2601.02744) spreading 
 
 Engram runs as a sidecar service. Any agent — Discord bot, Slack bot, Claude agent via MCP — posts raw observations to Engram, then queries it at retrieval time. The service handles everything else.
 
-**Three memory tiers:**
+**Three memory tiers + schemas:**
 
 | Tier | Type | Description |
 |------|------|-------------|
 | 1 | **Episodes** | Raw ingested messages, events, observations — lossless |
 | 2 | **Entities** | Named entities (people, orgs, technologies) extracted by NER |
 | 3 | **Engrams** | LLM-consolidated memory summaries, the primary retrieval target |
+| — | **Schemas** | Recurring patterns extracted from L2+ engrams — behavioural generalizations surfaced at retrieval time |
 
 **Retrieval uses spreading activation.** Three signals seed the activation in parallel — semantic vector similarity, lexical BM25 full-text search, and NER-matched entity lookup — then activation spreads across the engram graph through typed edges. Lateral inhibition sharpens results. A "feeling of knowing" gate returns empty rather than confabulating when memory confidence is too low.
 
 **Consolidation is automatic.** A background pipeline runs every 15 minutes: Claude (or Ollama) infers semantic relationships between recent episodes using a sliding window, clusters them, and summarizes each cluster into an engram. Engrams link back to their source episodes and extracted entities, building a traversable memory graph without any manual curation.
 
 **Multi-level compression.** Every engram has five pre-computed pyramid summaries (4, 8, 16, 32, 64 words). Callers request the compression level that fits their token budget.
+
+**Schema induction.** After enough memories accumulate, Engram extracts recurring behavioural schemas — generalizations about problem types, approaches, and what works. Schemas are pre-computed at all compression levels and surfaced automatically alongside recalled memories, letting agents apply learned patterns without storing everything in the prompt.
 
 ## Quickstart
 
@@ -174,7 +177,7 @@ Add to `claude_desktop_config.json` or `.mcp.json`:
 }
 ```
 
-MCP tools: `search_memory`, `list_engrams`, `get_engram`, `get_engram_context`, `query_episode`.
+MCP tools: `search_memory`, `list_engrams`, `get_engram`, `get_engram_context`, `query_episode`, `get_schema`.
 
 ## Architecture
 

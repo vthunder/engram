@@ -13,14 +13,14 @@ A full OpenAPI 3.0 specification is at [`openapi.yaml`](../openapi.yaml).
 | `GET` | `/health` | Service health check (public) |
 | `POST` | `/v1/episodes` | Ingest a raw episode |
 | `GET` | `/v1/episodes` | List episodes; `?channel=`, `?unconsolidated=`, `?before={id}`, `?level=N` |
-| `POST` | `/v1/episodes/search` | Text search over episode content |
+| `POST` | `/v1/episodes/search` | Text or ID-lookup search over episodes |
 | `GET` | `/v1/episodes/count` | Episode count; `?channel=`, `?unconsolidated=` filters |
 | `GET` | `/v1/episodes/{id}` | Get episode by ID or 5-char prefix; `?level=N`, `?detail=full` |
 | `POST` | `/v1/episodes/summaries` | Batch fetch pyramid summaries for episode IDs |
 | `POST` | `/v1/episodes/{id}/edges` | Add a typed edge between two episodes |
 | `POST` | `/v1/thoughts` | Ingest a free-form thought (shorthand for episodes) |
 | `GET` | `/v1/engrams` | List engrams; `?threshold=` filter |
-| `POST` | `/v1/engrams/search` | Semantic search via spreading activation |
+| `POST` | `/v1/engrams/search` | Semantic search or ID-lookup; returns `schema_ids` per engram |
 | `GET` | `/v1/engrams/{id}` | Get engram by ID; `?level=N` for pyramid compression |
 | `DELETE` | `/v1/engrams/{id}` | Delete an engram |
 | `GET` | `/v1/engrams/{id}/context` | Engram + source episodes + linked entities |
@@ -30,6 +30,11 @@ A full OpenAPI 3.0 specification is at [`openapi.yaml`](../openapi.yaml).
 | `POST` | `/v1/entities/search` | Text search over entity names and aliases |
 | `GET` | `/v1/entities/{id}` | Get entity by canonical ID |
 | `GET` | `/v1/entities/{id}/engrams` | All engrams linked to an entity |
+| `GET` | `/v1/schemas` | List all schemas |
+| `POST` | `/v1/schemas/search` | ID-lookup returning precomputed schema summaries |
+| `GET` | `/v1/schemas/{id}` | Get schema by ID; `?level=N` for precomputed summary |
+| `DELETE` | `/v1/schemas/{id}` | Delete a schema |
+| `POST` | `/v1/schemas/induce` | Trigger schema induction from L2+ engrams (async) |
 | `POST` | `/v1/consolidate` | Trigger consolidation pipeline manually |
 | `POST` | `/v1/activation/decay` | Apply exponential decay to all engram activations |
 | `POST` | `/v1/memory/flush` | Alias for `/v1/consolidate` |
@@ -139,17 +144,26 @@ All filters compose freely: `?channel=X&unconsolidated=true&before={id}&level=8`
 
 #### `POST /v1/episodes/search`
 
-Text search over episode content. Returns `[{id, content}]` by default.
+Search over episode content. Returns `[{id, content}]` by default. Supports two modes:
 
-Request:
+**Text search mode:**
 ```json
 {"query": "morning standup", "limit": 10, "detail": "full", "level": 8}
 ```
 
-- `query` — required; substring search over episode content
+- `query` — required in text mode; substring search over episode content
 - `limit` — max results (default 10)
 - `detail` — set to `"full"` for all fields
 - `level` — pyramid compression level applied to returned content
+
+**ID lookup mode:**
+```json
+{"ids": ["a3f2b9c1", "b5c8d1e4"], "level": 8}
+```
+
+- `ids` — list of episode IDs (full or 5-char prefix) to fetch in bulk
+- `level` — compression level applied to returned content
+- Preserves the order of the `ids` list; unknown IDs are silently skipped
 
 #### `GET /v1/episodes/{id}`
 
@@ -230,17 +244,28 @@ Query params:
 
 #### `POST /v1/engrams/search`
 
-Semantic search via spreading activation. Returns ranked engrams matching the query.
+Search or ID-lookup for engrams. Returns `[{id, summary, schema_ids}]` by default. Supports two modes:
 
-Request:
+**Semantic search mode:**
 ```json
 {"query": "Alice meeting preferences", "limit": 10, "detail": "full", "level": 0}
 ```
 
-- `query` — required; natural language search. Seeds spreading activation via semantic KNN, lexical BM25, and entity matching.
+- `query` — required in semantic mode; natural language search. Seeds spreading activation via semantic KNN, lexical BM25, and entity matching.
 - `limit` — max results (default 10)
 - `detail` — set to `"full"` for all fields
 - `level` — pyramid compression level applied to returned engrams
+
+**ID lookup mode:**
+```json
+{"ids": ["a3f2b9c1", "b5c8d1e4"], "level": 32}
+```
+
+- `ids` — list of engram IDs (full or 5-char prefix) to fetch in bulk
+- `level` — compression level applied to returned summaries
+- Preserves the order of the `ids` list; unknown IDs are silently skipped
+
+Both modes populate `schema_ids` — the IDs of any schemas associated with each returned engram. Use `POST /v1/schemas/search` with those IDs to retrieve compact schema summaries for context assembly.
 
 #### `GET /v1/engrams/{id}`
 
@@ -364,6 +389,68 @@ Response:
 | `PET` | Pet names _(custom)_ |
 | `DATE`, `TIME`, `MONEY`, `PERCENT`, `QUANTITY`, `CARDINAL`, `ORDINAL` | Numeric / temporal |
 | `OTHER` | Unclassified |
+
+---
+
+### Schemas
+
+Schemas are recurring behavioural patterns extracted from L2+ engrams via LLM-based induction. Each schema captures a generalization: a problem type, a typical approach, and what has worked or not. They are precomputed at multiple compression levels for efficient context injection.
+
+#### `GET /v1/schemas`
+
+List all schemas ordered by most recently updated. Returns `[{id, name, content, created_at, updated_at}]`.
+
+#### `POST /v1/schemas/search`
+
+Fetch compact schema summaries for a list of IDs. This is the primary path for context assembly — call it with the `schema_ids` collected from engram search results to inject relevant patterns into your prompt.
+
+Request:
+```json
+{"ids": ["a3f2b", "c9d1e"], "level": 32}
+```
+
+- `ids` — required; list of schema IDs (full UUID or 5-char prefix)
+- `level` — precomputed compression level to return (default `32`). Valid levels: `4`, `8`, `16`, `32`, `64`.
+
+Response: array of `{id, name, summary, level}`, in `ids` order. Unknown IDs are silently skipped. Falls back to the schema `name` if no precomputed summary exists at the requested level.
+
+```json
+[
+  {"id": "a3f2b...", "name": "Memory System Debugging", "summary": "...", "level": 32},
+  {"id": "c9d1e...", "name": "Async Pipeline Design", "summary": "...", "level": 32}
+]
+```
+
+Note: text search mode (`{"query": "..."}`) is not yet implemented — use ID lookup only.
+
+#### `GET /v1/schemas/{id}`
+
+Get a single schema by full UUID or 5-char prefix.
+
+Query params:
+- `level=N` — return a precomputed summary instead of the full content. Valid levels: `4`, `8`, `16`, `32`, `64`. Falls back to full content if no summary exists at the requested level.
+
+Response: full schema object `{id, name, content, is_labile, created_at, updated_at}`. With `?level=N`, the `content` field is replaced with the precomputed summary.
+
+#### `DELETE /v1/schemas/{id}`
+
+Delete a schema. Returns `{"status": "deleted"}`.
+
+#### `POST /v1/schemas/induce`
+
+Trigger schema induction asynchronously from L2+ engrams. Engram runs this automatically after each consolidation cycle if enough L2+ engrams exist; use this endpoint to force an immediate run (e.g. after first deployment to backfill summaries for existing schemas).
+
+Response `202` if started:
+```json
+{"started": true}
+```
+
+Response `200` if skipped (not enough L2+ engrams):
+```json
+{"started": false, "reason": "not enough L2+ engrams (need at least 3)"}
+```
+
+Returns `503` if schema induction is not configured (no LLM).
 
 ---
 

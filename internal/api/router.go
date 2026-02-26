@@ -53,6 +53,7 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 
 		// Schemas (Phase 2: Schema Formation)
 		r.Get("/v1/schemas", svc.handleListSchemas)
+		r.Post("/v1/schemas/search", svc.handleSearchSchemas)
 		r.Get("/v1/schemas/{id}", svc.handleGetSchema)
 		r.Delete("/v1/schemas/{id}", svc.handleDeleteSchema)
 		r.Post("/v1/schemas/induce", svc.handleInduceSchemas)

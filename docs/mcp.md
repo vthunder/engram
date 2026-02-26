@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Engram exposes five tools via the [Model Context Protocol](https://modelcontextprotocol.io/) for use by Claude agents (Claude Desktop, Claude Code, or any MCP-compatible host).
+Engram exposes six tools via the [Model Context Protocol](https://modelcontextprotocol.io/) for use by Claude agents (Claude Desktop, Claude Code, or any MCP-compatible host).
 
 Enable with `ENGRAM_MCP=1`. See [API reference](api.md#mcp-server) for connection setup.
 
@@ -15,6 +15,7 @@ Enable with `ENGRAM_MCP=1`. See [API reference](api.md#mcp-server) for connectio
 | `get_engram` | `engram_id` | Fetch a single engram by ID, with optional compression |
 | `get_engram_context` | `engram_id` | Fetch an engram plus its source episodes and linked entities |
 | `query_episode` | `id` | Fetch a raw source episode by ID |
+| `get_schema` | `schema_id` | Fetch a full schema (triggers, generalizations, what works) |
 
 ---
 
@@ -105,6 +106,29 @@ Fetches a single raw episode by its ID. Episodes are the unprocessed source obse
 
 ---
 
+---
+
+## `get_schema`
+
+Fetches a single schema by ID. Schemas are recurring behavioural patterns extracted from consolidated memories — they capture how certain problem types have been approached before, what generalizations hold, and what has or hasn't worked.
+
+Use this when a schema surfaced in your context (via the `## Active Schemas` section) looks relevant and you want the full structured details.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `schema_id` | string | yes | Full UUID or 5-char prefix (e.g. `a3f2b`) |
+
+**Returns:** Schema object with `id`, `name`, `content` (full structured text including TRIGGERS, GENERALIZATIONS, WHAT_WORKS, and WHAT_DOESNT_WORK sections).
+
+**Example:**
+```
+get_schema(schema_id="a3f2b")
+```
+
+---
+
 ## Suggested usage patterns
 
 **Answer a question from memory:**
@@ -118,3 +142,8 @@ Fetches a single raw episode by its ID. Episodes are the unprocessed source obse
 **Browse available memory:**
 1. `list_engrams()` to see all consolidated memories at a glance
 2. `get_engram(engram_id=<id>)` to expand any that look relevant
+
+**Use schemas for task guidance:**
+1. Review the `## Active Schemas` section in context — these are patterns auto-surfaced from recalled memories
+2. `get_schema(schema_id=<id>)` on any schema that looks applicable to the current task
+3. Don't fetch all schemas — only the ones that seem relevant

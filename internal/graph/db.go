@@ -1074,6 +1074,32 @@ func (g *DB) runMigrations() error {
 		log.Println("[graph] Migration to v27 completed: schema formation tables added")
 	}
 
+	// v28: Schema summaries (precomputed pyramid compression levels for schemas).
+	// Mirrors engram_summaries and entity_summaries — avoids on-the-fly formatting
+	// in the hot path when schemas are surfaced during context assembly.
+	if version < 28 {
+		stmts := []string{
+			`CREATE TABLE IF NOT EXISTS schema_summaries (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				schema_id        TEXT NOT NULL REFERENCES schemas(id) ON DELETE CASCADE,
+				compression_level INTEGER NOT NULL,
+				summary          TEXT NOT NULL,
+				tokens           INTEGER NOT NULL,
+				created_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE(schema_id, compression_level)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_schema_summaries_schema ON schema_summaries(schema_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_schema_summaries_level ON schema_summaries(compression_level)`,
+		}
+		for _, sql := range stmts {
+			if _, err := g.db.Exec(sql); err != nil {
+				log.Printf("[graph] Migration v28 error: %v", err)
+			}
+		}
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (28)")
+		log.Println("[graph] Migration to v28 completed: schema_summaries table added")
+	}
+
 	return nil
 }
 

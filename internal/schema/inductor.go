@@ -183,6 +183,11 @@ func (si *SchemaInductor) induceNewSchema(ctx context.Context, cluster []*graph.
 		return 0, fmt.Errorf("storing schema: %w", err)
 	}
 
+	// Precompute summaries at all compression levels (hot-path for context assembly)
+	if err := si.graph.GenerateSchemaSummaries(schema.ID, schema.Name, schema.Content); err != nil {
+		log.Printf("[schema-inductor] failed to generate summaries for %s: %v", schema.ID[:8], err)
+	}
+
 	// Create instance records for each engram in the cluster
 	for _, en := range cluster {
 		inst := &graph.SchemaInstance{
@@ -241,6 +246,11 @@ func (si *SchemaInductor) reconsolidateSchema(ctx context.Context, s *graph.Sche
 
 	if err := si.graph.UpdateSchemaContent(s.ID, content, embedding); err != nil {
 		return 0, fmt.Errorf("updating schema %s: %w", s.ID, err)
+	}
+
+	// Regenerate precomputed summaries with updated content
+	if err := si.graph.GenerateSchemaSummaries(s.ID, s.Name, content); err != nil {
+		log.Printf("[schema-inductor] failed to regenerate summaries for %s: %v", s.ID[:8], err)
 	}
 
 	log.Printf("[schema-inductor] reconsolidated schema %q (%s)", s.Name, s.ID[:8])

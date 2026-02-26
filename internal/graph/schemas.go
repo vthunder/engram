@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -264,6 +265,185 @@ func (g *DB) MarkSchemaAnomaly(schemaID, engramID string) error {
 		UPDATE schema_instances SET is_anomaly = 1 WHERE schema_id = ? AND engram_id = ?
 	`, schemaID, engramID)
 	return err
+}
+
+// GetSchemaIDsForEngrams returns a map of engram_id → []schema_id for a set of engram IDs.
+// Single query, avoids N+1.
+func (g *DB) GetSchemaIDsForEngrams(ids []string) (map[string][]string, error) {
+	if len(ids) == 0 {
+		return make(map[string][]string), nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(`
+		SELECT engram_id, schema_id FROM schema_annotations WHERE engram_id IN (%s)
+	`, strings.Join(placeholders, ","))
+	rows, err := g.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string][]string)
+	for rows.Next() {
+		var engramID, schemaID string
+		if rows.Scan(&engramID, &schemaID) == nil {
+			result[engramID] = append(result[engramID], schemaID)
+		}
+	}
+	return result, rows.Err()
+}
+
+// GetSchemasByIDs returns schemas for a list of IDs. Order is not guaranteed.
+func (g *DB) GetSchemasByIDs(ids []string) ([]*Schema, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(`
+		SELECT id, name, content, embedding, is_labile, created_at, updated_at
+		FROM schemas WHERE id IN (%s)
+	`, strings.Join(placeholders, ","))
+	rows, err := g.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSchemaRows(rows)
+}
+
+// FormatSchemaSummary builds a compact summary from schema content at a given word limit.
+// Parses the GENERALIZATIONS section; falls back to name only if absent.
+func FormatSchemaSummary(name, content string, maxWords int) string {
+	var bullets []string
+	inSection := false
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "GENERALIZATIONS") {
+			inSection = true
+			continue
+		}
+		if inSection {
+			// Stop at next section header (uppercase word(s), no leading dash)
+			if len(trimmed) > 0 && trimmed[0] != '-' && trimmed == strings.ToUpper(trimmed) && len(strings.Fields(trimmed)) <= 4 {
+				break
+			}
+			if strings.HasPrefix(trimmed, "- ") {
+				bullets = append(bullets, strings.TrimPrefix(trimmed, "- "))
+			}
+		}
+	}
+	if len(bullets) == 0 {
+		return name
+	}
+	// Build "Name: bullet1; bullet2" until word limit
+	prefix := name + ": "
+	wordCount := estimateWordCount(prefix)
+	var sb strings.Builder
+	sb.WriteString(prefix)
+	for i, b := range bullets {
+		bWords := estimateWordCount(b)
+		if wordCount+bWords > maxWords && i > 0 {
+			break
+		}
+		if i > 0 {
+			sb.WriteString("; ")
+			wordCount++
+		}
+		sb.WriteString(b)
+		wordCount += bWords
+	}
+	return sb.String()
+}
+
+// AddSchemaSummary stores a precomputed summary for a schema at a compression level.
+func (g *DB) AddSchemaSummary(schemaID string, level int, summary string, tokens int) error {
+	_, err := g.db.Exec(`
+		INSERT INTO schema_summaries (schema_id, compression_level, summary, tokens)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(schema_id, compression_level) DO UPDATE SET
+			summary = excluded.summary,
+			tokens = excluded.tokens
+	`, schemaID, level, summary, tokens)
+	return err
+}
+
+// GetSchemaSummary retrieves a precomputed schema summary at the given level,
+// falling back to higher compression levels. Returns "" if none found.
+func (g *DB) GetSchemaSummary(schemaID string, level int) (string, error) {
+	for lvl := level; lvl <= CompressionLevelMax; lvl++ {
+		var summary string
+		err := g.db.QueryRow(`
+			SELECT summary FROM schema_summaries WHERE schema_id = ? AND compression_level = ?
+		`, schemaID, lvl).Scan(&summary)
+		if err == nil {
+			return summary, nil
+		}
+	}
+	return "", nil
+}
+
+// GetSchemaSummariesBatch retrieves summaries for multiple schemas at the nearest available
+// level >= target. Returns a map of schema_id → summary string.
+func (g *DB) GetSchemaSummariesBatch(ids []string, level int) (map[string]string, error) {
+	if len(ids) == 0 {
+		return make(map[string]string), nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, 1+len(ids))
+	args[0] = level
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i+1] = id
+	}
+	query := fmt.Sprintf(`
+		SELECT schema_id, compression_level, summary
+		FROM schema_summaries
+		WHERE compression_level >= ? AND schema_id IN (%s)
+		ORDER BY schema_id, compression_level ASC
+	`, strings.Join(placeholders, ","))
+	rows, err := g.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]string)
+	for rows.Next() {
+		var schemaID string
+		var lvl int
+		var summary string
+		if err := rows.Scan(&schemaID, &lvl, &summary); err != nil {
+			continue
+		}
+		// Keep only the first (lowest available level) per schema.
+		if _, exists := result[schemaID]; !exists {
+			result[schemaID] = summary
+		}
+	}
+	return result, rows.Err()
+}
+
+// GenerateSchemaSummaries precomputes summaries at all compression levels for a schema.
+// Called at induction time (after AddSchema) and for backfilling existing schemas.
+// No LLM needed — summaries are extracted from the GENERALIZATIONS section.
+func (g *DB) GenerateSchemaSummaries(schemaID, name, content string) error {
+	levels := []int{CompressionLevel4, CompressionLevel8, CompressionLevel16, CompressionLevel32, CompressionLevel64}
+	for _, lvl := range levels {
+		summary := FormatSchemaSummary(name, content, lvl)
+		tokens := estimateTokens(summary)
+		if err := g.AddSchemaSummary(schemaID, lvl, summary, tokens); err != nil {
+			return fmt.Errorf("schema summary level %d: %w", lvl, err)
+		}
+	}
+	return nil
 }
 
 // --- scan helpers ---

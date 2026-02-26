@@ -4,10 +4,11 @@ info:
   description: |
     HTTP API for the Engram memory graph system.
 
-    Engram stores memories as a three-tier graph:
+    Engram stores memories as a four-tier graph:
     - **Episodes** (Tier 1): Raw ingested messages and events
     - **Entities** (Tier 2): Named entities extracted from episodes
     - **Engrams** (Tier 3): Consolidated memories built from episode clusters
+    - **Schemas** (Tier 4): Cross-cutting pattern templates extracted from L2+ engrams
 
     All `/v1/*` endpoints require Bearer token authentication.
     The `/health` endpoint is public.
@@ -148,6 +149,12 @@ components:
         summary:
           type: string
           description: Consolidated summary of source episodes
+        level:
+          type: integer
+          description: Compression level applied to summary (0 = stored verbatim)
+        depth:
+          type: integer
+          description: "Hierarchy depth: 0 = L1 (built from episodes), 1 = L2 (from L1s), etc."
         topic:
           type: string
         engram_type:
@@ -165,6 +172,10 @@ components:
             type: number
             format: double
           description: Vector embedding (omitted by default)
+        event_time:
+          type: string
+          format: date-time
+          description: MAX(timestamp_event) of source episodes
         created_at:
           type: string
           format: date-time
@@ -185,6 +196,11 @@ components:
           items:
             type: string
           description: IDs of linked entities (populated on retrieval)
+        schema_ids:
+          type: array
+          items:
+            type: string
+          description: IDs of matched schemas (populated on retrieval)
 
     EngramType:
       type: string
@@ -236,6 +252,75 @@ components:
           items:
             $ref: "#/components/schemas/Entity"
 
+    Schema:
+      type: object
+      description: |
+        A cross-cutting pattern template extracted from L2+ engrams.
+        Not a summary of what happened — a template for what class of event this is,
+        with generalizations extracted from multiple instances.
+      properties:
+        id:
+          type: string
+          description: 32-char BLAKE3 hex ID; use any 5+ char prefix to reference
+        name:
+          type: string
+          description: Short human-readable label (e.g. "Memory System Debugging")
+        content:
+          type: string
+          description: |
+            Full semi-structured prose with PATTERN, GENERALIZATIONS, INSTANCES, etc.
+            When `?level=N` is requested, replaced by a precomputed N-word summary of
+            the GENERALIZATIONS section.
+        is_labile:
+          type: boolean
+          description: If true, needs reconsolidation at the next induction run
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        instances:
+          type: array
+          items:
+            $ref: "#/components/schemas/SchemaInstance"
+          description: Engrams that matched this schema (populated on retrieval)
+
+    SchemaInstance:
+      type: object
+      description: Records that a specific engram matched a schema, with extracted slot values.
+      properties:
+        schema_id:
+          type: string
+        engram_id:
+          type: string
+        slot_values:
+          type: object
+          additionalProperties:
+            type: string
+          description: "Extracted slot values keyed by slot name (e.g. {\"trigger\": \"...\", \"fix\": \"...\"})"
+        is_anomaly:
+          type: boolean
+          description: True if the instance deviates from the schema pattern
+        matched_at:
+          type: string
+          format: date-time
+
+    SchemaSummaryCard:
+      type: object
+      description: Lightweight schema representation returned by POST /v1/schemas/search.
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        summary:
+          type: string
+          description: Precomputed summary at the requested compression level
+        level:
+          type: integer
+          description: Compression level applied (words)
+
     ErrorResponse:
       type: object
       required:
@@ -277,10 +362,16 @@ paths:
 
   /v1/episodes/search:
     post:
-      summary: Search episodes by text
+      summary: Search episodes by text or fetch by IDs
       description: |
-        Text search over episode content. Returns `[{id, content}]` by default.
-        Add `"detail": "full"` in the request body for all fields.
+        Supports two modes — exactly one of `query` or `ids` must be provided.
+
+        **Text search mode** (`query`): Full-text substring search over episode content.
+
+        **ID lookup mode** (`ids`): Fetch specific episodes by ID in request order. Supports
+        the same `level` and `detail` options as text search. Unknown IDs are silently skipped.
+
+        Returns `[{id, content}]` by default; add `"detail": "full"` for all fields.
       operationId: searchEpisodes
       tags:
         - Episodes
@@ -290,16 +381,19 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - query
               properties:
                 query:
                   type: string
-                  description: Text substring search over episode content
+                  description: Text substring search over episode content (mutually exclusive with `ids`)
+                ids:
+                  type: array
+                  items:
+                    type: string
+                  description: Fetch episodes by these IDs in order (mutually exclusive with `query`)
                 limit:
                   type: integer
                   default: 10
-                  description: Maximum results (default 10)
+                  description: Maximum results for text search mode (default 10; ignored in ID lookup mode)
                 detail:
                   type: string
                   enum: [full]
@@ -718,16 +812,20 @@ paths:
 
   /v1/engrams/search:
     post:
-      summary: Search engrams by semantic query
+      summary: Search engrams by semantic query or fetch by IDs
       description: |
-        Semantic search via spreading activation. Returns ranked engrams matching the query.
+        Supports two modes — exactly one of `query` or `ids` must be provided.
+
+        **Text search mode** (`query`): Semantic search via spreading activation. Retrieval uses
+        three concurrent seed triggers: semantic KNN, lexical BM25, and entity regex matching.
+        When a NER service is configured, entities extracted from the query string also seed
+        the activation graph (fourth trigger). Returns results ranked by activation.
+
+        **ID lookup mode** (`ids`): Fetch specific engrams by ID in request order. Supports the
+        same `level` and `detail` options as text search. Unknown IDs are silently skipped.
 
         **Default response** is minimal: `[{id, summary}]`.
-        Add `"detail": "full"` in the request body for all fields.
-
-        Retrieval uses three concurrent seed triggers: semantic KNN, lexical BM25, and entity
-        regex matching. When a NER service is configured, entities extracted from the query
-        string also seed the activation graph (fourth trigger).
+        Add `"detail": "full"` for all fields. Both modes populate `schema_ids` on results.
       operationId: searchEngrams
       tags:
         - Engrams
@@ -737,16 +835,19 @@ paths:
           application/json:
             schema:
               type: object
-              required:
-                - query
               properties:
                 query:
                   type: string
-                  description: Natural language search query
+                  description: Natural language search query (mutually exclusive with `ids`)
+                ids:
+                  type: array
+                  items:
+                    type: string
+                  description: Fetch engrams by these IDs in order (mutually exclusive with `query`)
                 limit:
                   type: integer
                   default: 10
-                  description: Maximum results (default 10)
+                  description: Maximum results for text search mode (default 10; ignored in ID lookup mode)
                 detail:
                   type: string
                   enum: [full]
@@ -1389,6 +1490,247 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /v1/schemas:
+    get:
+      summary: List schemas
+      description: |
+        Returns all schemas ordered by `updated_at` descending.
+        Embeddings are never returned. Content is the full semi-structured prose.
+      operationId: listSchemas
+      tags:
+        - Schemas
+      responses:
+        "200":
+          description: List of schemas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    name:
+                      type: string
+                    content:
+                      type: string
+                    is_labile:
+                      type: boolean
+                    created_at:
+                      type: string
+                      format: date-time
+                    updated_at:
+                      type: string
+                      format: date-time
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/schemas/search:
+    post:
+      summary: Fetch schema summaries by IDs
+      description: |
+        Supports two modes — exactly one of `ids` or `query` must be provided.
+
+        **ID lookup mode** (`ids`, primary use case): Returns a lightweight summary card for each
+        schema ID, using precomputed summaries at the requested compression level. Results follow
+        request order; unknown IDs are silently skipped.
+
+        **Text search mode** (`query`): Not yet implemented — returns 501.
+      operationId: searchSchemas
+      tags:
+        - Schemas
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+                  description: Schema IDs to fetch (mutually exclusive with `query`)
+                query:
+                  type: string
+                  description: Text search (not yet implemented; use `ids` instead)
+                level:
+                  type: integer
+                  default: 32
+                  description: "Compression level for the returned summary: 4, 8, 16, 32, 64 (default 32)"
+      responses:
+        "200":
+          description: List of schema summary cards in request order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SchemaSummaryCard"
+        "400":
+          description: Missing or invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "501":
+          description: Text search not yet implemented
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/schemas/{id}:
+    get:
+      summary: Get a schema
+      description: |
+        Returns a single schema with its instance list.
+
+        Add `?level=N` to replace the `content` field with a precomputed N-word summary
+        of the GENERALIZATIONS section (the most stable part of the schema). Valid levels:
+        4, 8, 16, 32, 64. If no precomputed summary exists at that level, `content` is
+        returned verbatim.
+      operationId: getSchema
+      tags:
+        - Schemas
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full schema ID or 5-char short ID
+        - name: level
+          in: query
+          schema:
+            type: integer
+          description: "Return a precomputed summary at this compression level instead of full content"
+      responses:
+        "200":
+          description: Schema with instance list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schema"
+        "400":
+          description: Invalid ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Schema not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      summary: Delete a schema
+      description: Permanently deletes a schema and its instance annotations.
+      operationId: deleteSchema
+      tags:
+        - Schemas
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Full schema ID or 5-char short ID
+      responses:
+        "200":
+          description: Schema deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "deleted"
+        "400":
+          description: Invalid ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/schemas/induce:
+    post:
+      summary: Trigger schema induction
+      description: |
+        Runs the schema induction pipeline asynchronously over all L2+ engrams. Requires
+        at least 3 L2+ engrams; returns `{"started": false}` otherwise.
+
+        Induction clusters engrams by activity type/pattern, then uses an LLM to extract
+        cross-cutting schemas. Requires `llm` to be configured in `engram.yaml`.
+
+        Returns HTTP 202 immediately when started; induction continues in the background.
+        Run this manually to backfill `schema_summaries` after first deployment, or after
+        a DB wipe. Otherwise induction runs automatically as part of consolidation.
+      operationId: induceSchemas
+      tags:
+        - Schemas
+      responses:
+        "200":
+          description: Not enough L2+ engrams to run induction
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started:
+                    type: boolean
+                    example: false
+                  reason:
+                    type: string
+                    example: "not enough L2+ engrams (need at least 3)"
+        "202":
+          description: Induction started asynchronously
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  started:
+                    type: boolean
+                    example: true
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Schema induction not configured (no LLM)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 tags:
   - name: Health
     description: Health check endpoint
@@ -1402,6 +1744,8 @@ tags:
     description: Access raw episode memories (Tier 1)
   - name: Entities
     description: Access extracted named entities (Tier 2)
+  - name: Schemas
+    description: Cross-cutting pattern templates extracted from L2+ engrams (Tier 4)
   - name: Activation
     description: Manage memory activation and forgetting
   - name: Management

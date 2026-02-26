@@ -51,6 +51,9 @@ func engramCard(e *graph.Engram) map[string]any {
 	if e.Level > 0 {
 		card["level"] = e.Level
 	}
+	if len(e.SchemaIDs) > 0 {
+		card["schema_ids"] = e.SchemaIDs
+	}
 	return card
 }
 
@@ -411,26 +414,63 @@ func (s *Services) nerEntityEngrams(queryStr string) []string {
 // --- Engrams ---
 
 type searchEngramsRequest struct {
-	Query  string `json:"query"`
-	Limit  int    `json:"limit,omitempty"`
-	Detail string `json:"detail,omitempty"`
-	Level  int    `json:"level,omitempty"`
+	Query  string   `json:"query"`
+	IDs    []string `json:"ids,omitempty"`
+	Limit  int      `json:"limit,omitempty"`
+	Detail string   `json:"detail,omitempty"`
+	Level  int      `json:"level,omitempty"`
 }
 
 // handleSearchEngrams handles POST /v1/engrams/search.
 // Accepts a JSON body to support arbitrarily large query strings.
+// Supports two modes:
+//   - ID lookup: {"ids": [...], "level": 32} — returns engrams for given IDs
+//   - Text search: {"query": "...", "level": 32} — semantic search
 func (s *Services) handleSearchEngrams(w http.ResponseWriter, r *http.Request) {
 	var req searchEngramsRequest
 	if err := decode(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if req.Query == "" {
-		writeError(w, http.StatusBadRequest, "missing_field", "query is required")
+	if req.Query == "" && len(req.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "missing_field", "query or ids is required")
 		return
 	}
 
 	full := req.Detail == "full"
+
+	// ID lookup mode
+	if len(req.IDs) > 0 {
+		engramMap, err := s.Graph.GetEngramsBatch(req.IDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		// Preserve request order
+		engrams := make([]*graph.Engram, 0, len(req.IDs))
+		for _, id := range req.IDs {
+			if en, ok := engramMap[id]; ok {
+				engrams = append(engrams, en)
+			}
+		}
+		applyEngramLevels(s.Graph, engrams, req.Level)
+		populateSchemaIDs(s.Graph, engrams)
+		if full {
+			for _, e := range engrams {
+				e.Embedding = nil
+			}
+			writeJSON(w, http.StatusOK, nonNil(engrams))
+		} else {
+			cards := make([]map[string]any, 0, len(engrams))
+			for _, e := range engrams {
+				cards = append(cards, engramCard(e))
+			}
+			writeJSON(w, http.StatusOK, cards)
+		}
+		return
+	}
+
+	// Text search mode
 	limit := req.Limit
 	if limit <= 0 {
 		limit = 10
@@ -465,6 +505,7 @@ func (s *Services) handleSearchEngrams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	applyEngramLevels(s.Graph, result.Engrams, req.Level)
+	populateSchemaIDs(s.Graph, result.Engrams)
 	if full {
 		for _, e := range result.Engrams {
 			e.Embedding = nil
@@ -476,6 +517,26 @@ func (s *Services) handleSearchEngrams(w http.ResponseWriter, r *http.Request) {
 			cards = append(cards, engramCard(e))
 		}
 		writeJSON(w, http.StatusOK, cards)
+	}
+}
+
+// populateSchemaIDs batch-fetches schema annotations and sets SchemaIDs on each engram.
+func populateSchemaIDs(g *graph.DB, engrams []*graph.Engram) {
+	if len(engrams) == 0 {
+		return
+	}
+	ids := make([]string, len(engrams))
+	for i, e := range engrams {
+		ids[i] = e.ID
+	}
+	schemaMap, err := g.GetSchemaIDsForEngrams(ids)
+	if err != nil {
+		return
+	}
+	for _, e := range engrams {
+		if sids, ok := schemaMap[e.ID]; ok {
+			e.SchemaIDs = sids
+		}
 	}
 }
 
@@ -706,23 +767,41 @@ func (s *Services) handleGetEngramContext(w http.ResponseWriter, r *http.Request
 // --- Episodes ---
 
 type searchEpisodesRequest struct {
-	Query  string `json:"query"`
-	Limit  int    `json:"limit,omitempty"`
-	Detail string `json:"detail,omitempty"`
-	Level  int    `json:"level,omitempty"`
+	Query  string   `json:"query"`
+	IDs    []string `json:"ids,omitempty"`
+	Limit  int      `json:"limit,omitempty"`
+	Detail string   `json:"detail,omitempty"`
+	Level  int      `json:"level,omitempty"`
 }
 
 // handleSearchEpisodes handles POST /v1/episodes/search.
+// Supports two modes:
+//   - ID lookup: {"ids": [...], "level": 32} — returns episodes for given IDs
+//   - Text search: {"query": "...", "level": 32} — full-text search
 func (s *Services) handleSearchEpisodes(w http.ResponseWriter, r *http.Request) {
 	var req searchEpisodesRequest
 	if err := decode(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if req.Query == "" {
-		writeError(w, http.StatusBadRequest, "missing_field", "query is required")
+	if req.Query == "" && len(req.IDs) == 0 {
+		writeError(w, http.StatusBadRequest, "missing_field", "query or ids is required")
 		return
 	}
+
+	// ID lookup mode
+	if len(req.IDs) > 0 {
+		episodes, err := s.Graph.GetEpisodes(req.IDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		applyEpisodeLevels(s.Graph, episodes, req.Level)
+		writeEpisodeList(w, episodes, req.Detail == "full")
+		return
+	}
+
+	// Text search mode
 	limit := req.Limit
 	if limit <= 0 {
 		limit = 10
