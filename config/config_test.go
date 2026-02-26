@@ -232,7 +232,7 @@ ner:
 }
 
 func TestAnthropicAPIKeyNoFallbackWhenSet(t *testing.T) {
-	// ENGRAM_LLM_API_KEY takes precedence over ANTHROPIC_API_KEY
+	// ENGRAM_LLM_API_KEY takes precedence over ANTHROPIC_API_KEY (specific env override beats global)
 	yaml := `
 server:
   port: 8080

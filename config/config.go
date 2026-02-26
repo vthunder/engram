@@ -15,6 +15,10 @@ import (
 type Config struct {
 	Server        ServerConfig        `yaml:"server"`
 	Storage       StorageConfig       `yaml:"storage"`
+	// Anthropic holds credentials for the Anthropic API.
+	// Priority: ANTHROPIC_API_KEY env (highest) > per-LLM api_key > anthropic.api_key (lowest).
+	// api_key set here is used only when no env var or per-LLM key is present.
+	Anthropic       AnthropicConfig     `yaml:"anthropic"`
 	// Deprecated: use CompressionLLM, ConsolidationLLM, and InferenceLLM instead.
 	// If set, it acts as a fallback for any unset specific config.
 	// A deprecation warning will be logged at startup.
@@ -27,6 +31,11 @@ type Config struct {
 	Consolidation ConsolidationConfig `yaml:"consolidation"`
 	Decay         DecayConfig         `yaml:"decay"`
 	Identity      IdentityConfig      `yaml:"identity"`
+}
+
+// AnthropicConfig holds shared credentials for the Anthropic API.
+type AnthropicConfig struct {
+	APIKey string `yaml:"api_key"`
 }
 
 type ServerConfig struct {
@@ -143,6 +152,31 @@ func applyEnv(cfg *Config) {
 	if v := env("ENGRAM_STORAGE_PATH"); v != "" {
 		cfg.Storage.Path = v
 	}
+
+	// Priority: ANTHROPIC_API_KEY env > per-LLM api_key (yaml) > anthropic.api_key (yaml).
+	// Processed before per-LLM ENGRAM_*_LLM_API_KEY vars so those can still override it.
+	if envKey := env("ANTHROPIC_API_KEY"); envKey != "" {
+		cfg.Anthropic.APIKey = envKey
+		cfg.LLM.APIKey = envKey
+		cfg.CompressionLLM.APIKey = envKey
+		cfg.ConsolidationLLM.APIKey = envKey
+		cfg.InferenceLLM.APIKey = envKey
+	} else if cfg.Anthropic.APIKey != "" {
+		// Top-level anthropic.api_key fills in per-LLM configs with no explicit yaml key.
+		if cfg.LLM.APIKey == "" {
+			cfg.LLM.APIKey = cfg.Anthropic.APIKey
+		}
+		if cfg.CompressionLLM.APIKey == "" {
+			cfg.CompressionLLM.APIKey = cfg.Anthropic.APIKey
+		}
+		if cfg.ConsolidationLLM.APIKey == "" {
+			cfg.ConsolidationLLM.APIKey = cfg.Anthropic.APIKey
+		}
+		if cfg.InferenceLLM.APIKey == "" {
+			cfg.InferenceLLM.APIKey = cfg.Anthropic.APIKey
+		}
+	}
+
 	// Deprecated llm.* env vars
 	if v := env("ENGRAM_LLM_PROVIDER"); v != "" {
 		cfg.LLM.Provider = v
@@ -211,21 +245,6 @@ func applyEnv(cfg *Config) {
 		cfg.InferenceLLM.BinaryPath = v
 	}
 
-	// ANTHROPIC_API_KEY is a global fallback for any anthropic-using config
-	if v := env("ANTHROPIC_API_KEY"); v != "" {
-		if cfg.LLM.APIKey == "" {
-			cfg.LLM.APIKey = v
-		}
-		if cfg.CompressionLLM.APIKey == "" {
-			cfg.CompressionLLM.APIKey = v
-		}
-		if cfg.ConsolidationLLM.APIKey == "" {
-			cfg.ConsolidationLLM.APIKey = v
-		}
-		if cfg.InferenceLLM.APIKey == "" {
-			cfg.InferenceLLM.APIKey = v
-		}
-	}
 	if v := env("ENGRAM_EMBEDDING_BASE_URL"); v != "" {
 		cfg.Embedding.BaseURL = v
 	}
