@@ -144,6 +144,18 @@ func (s *Services) handleSearchSchemas(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotImplemented, "not_implemented", "text search for schemas not yet supported; use ids")
 }
 
+// handleBackfillSchemaSummaries handles POST /v1/schemas/backfill-summaries.
+// Generates precomputed summaries for any schemas that don't have them.
+// No LLM required — summaries are extracted from GENERALIZATIONS section.
+func (s *Services) handleBackfillSchemaSummaries(w http.ResponseWriter, r *http.Request) {
+	n, err := s.Graph.BackfillSchemaSummaries()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backfilled": n})
+}
+
 // handleDeleteSchema handles DELETE /v1/schemas/{id}.
 func (s *Services) handleDeleteSchema(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

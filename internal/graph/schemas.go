@@ -332,12 +332,19 @@ func FormatSchemaSummary(name, content string, maxWords int) string {
 			continue
 		}
 		if inSection {
-			// Stop at next section header (uppercase word(s), no leading dash)
-			if len(trimmed) > 0 && trimmed[0] != '-' && trimmed == strings.ToUpper(trimmed) && len(strings.Fields(trimmed)) <= 4 {
+			// Stop at next section header (uppercase word(s))
+			if len(trimmed) > 0 && trimmed == strings.ToUpper(trimmed) && len(strings.Fields(trimmed)) <= 4 {
 				break
 			}
+			// Accept both "- bullet" and "1. bullet" list styles
 			if strings.HasPrefix(trimmed, "- ") {
 				bullets = append(bullets, strings.TrimPrefix(trimmed, "- "))
+			} else if len(trimmed) > 2 && trimmed[0] >= '1' && trimmed[0] <= '9' && trimmed[1] == '.' {
+				// Numbered item: strip "N. " prefix
+				rest := strings.TrimSpace(trimmed[2:])
+				if rest != "" {
+					bullets = append(bullets, rest)
+				}
 			}
 		}
 	}
@@ -444,6 +451,38 @@ func (g *DB) GenerateSchemaSummaries(schemaID, name, content string) error {
 		}
 	}
 	return nil
+}
+
+// BackfillSchemaSummaries (re)generates summaries for all schemas.
+// Safe to call at startup or via API — no LLM needed, pure text extraction.
+// Uses upsert so existing summaries are overwritten with corrected versions.
+// Returns the count of schemas processed.
+func (g *DB) BackfillSchemaSummaries() (int, error) {
+	rows, err := g.db.Query(`SELECT id, name, content FROM schemas`)
+	if err != nil {
+		return 0, fmt.Errorf("querying schemas without summaries: %w", err)
+	}
+	defer rows.Close()
+
+	type schemaRow struct{ id, name, content string }
+	var pending []schemaRow
+	for rows.Next() {
+		var r schemaRow
+		if err := rows.Scan(&r.id, &r.name, &r.content); err != nil {
+			return 0, err
+		}
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	for _, r := range pending {
+		if err := g.GenerateSchemaSummaries(r.id, r.name, r.content); err != nil {
+			return 0, fmt.Errorf("generating summaries for schema %s: %w", r.id[:8], err)
+		}
+	}
+	return len(pending), nil
 }
 
 // --- scan helpers ---
