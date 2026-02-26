@@ -1174,7 +1174,9 @@ func (s *Services) handleBoostEngrams(w http.ResponseWriter, r *http.Request) {
 // handleRegenerateEngramPyramids regenerates stored pyramid summaries (L4–L64) for all
 // engrams (or a depth-filtered subset) using the current compression prompts.
 // The operation runs in the background; the endpoint returns immediately with a count of
-// engrams queued. Optional query param: ?depth=0 to process only L1 engrams.
+// engrams queued. Optional query params:
+//   - ?depth=0       — process only L1 engrams
+//   - ?missing_only=true — skip engrams that already have pyramid summaries
 func (s *Services) handleRegenerateEngramPyramids(w http.ResponseWriter, r *http.Request) {
 	if s.CompressQueue == nil {
 		writeError(w, http.StatusServiceUnavailable, "not_configured", "compression not configured")
@@ -1183,34 +1185,51 @@ func (s *Services) handleRegenerateEngramPyramids(w http.ResponseWriter, r *http
 	compressor := s.CompressQueue.Compressor()
 
 	depth := parseDepth(r)
+	missingOnly := r.URL.Query().Get("missing_only") == "true"
 
-	engrams, err := s.Graph.GetAllEngrams()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
-		return
+	var engramIDs []string
+
+	if missingOnly {
+		ids, err := s.Graph.GetEngramIDsMissingPyramids(depth)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		engramIDs = ids
+	} else {
+		engrams, err := s.Graph.GetAllEngrams()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+			return
+		}
+		engrams = filterByDepth(engrams, depth)
+		engramIDs = make([]string, len(engrams))
+		for i, e := range engrams {
+			engramIDs[i] = e.ID
+		}
 	}
-	engrams = filterByDepth(engrams, depth)
 
-	count := len(engrams)
+	count := len(engramIDs)
 	botName := s.BotName
 	logger := s.Logger
 
 	go func() {
 		done, failed := 0, 0
-		for _, e := range engrams {
-			if err := s.Graph.RegenerateEngramPyramid(e.ID, compressor, botName); err != nil {
-				logger.Warn("pyramid regen failed", "id", e.ID, "err", err)
+		for _, id := range engramIDs {
+			if err := s.Graph.RegenerateEngramPyramid(id, compressor, botName); err != nil {
+				logger.Warn("pyramid regen failed", "id", id, "err", err)
 				failed++
 				continue
 			}
 			done++
 		}
-		logger.Info("engram pyramid regeneration complete", "done", done, "failed", failed, "total", count)
+		logger.Info("engram pyramid regeneration complete", "done", done, "failed", failed, "total", count, "missing_only", missingOnly)
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"started": count,
-		"depth":   depth,
+		"started":      count,
+		"depth":        depth,
+		"missing_only": missingOnly,
 	})
 }
 

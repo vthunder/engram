@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -339,6 +340,50 @@ type EngramSummary struct {
 func (g *DB) DeleteAllEngramSummaries() error {
 	_, err := g.db.Exec(`DELETE FROM engram_summaries`)
 	return err
+}
+
+// GetEngramIDsMissingPyramids returns IDs of engrams that have no pyramid summaries
+// (i.e., no engram_summaries rows with compression_level >= 4).
+// When depth >= 0, only engrams at that depth are returned.
+func (g *DB) GetEngramIDsMissingPyramids(depth int) ([]string, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if depth >= 0 {
+		rows, err = g.db.Query(`
+			SELECT e.id FROM engrams e
+			WHERE COALESCE(e.depth, 0) = ?
+			  AND NOT EXISTS (
+			    SELECT 1 FROM engram_summaries es
+			    WHERE es.engram_id = e.id AND es.compression_level >= 4
+			  )
+			ORDER BY e.created_at DESC
+		`, depth)
+	} else {
+		rows, err = g.db.Query(`
+			SELECT e.id FROM engrams e
+			WHERE NOT EXISTS (
+			    SELECT 1 FROM engram_summaries es
+			    WHERE es.engram_id = e.id AND es.compression_level >= 4
+			  )
+			ORDER BY e.created_at DESC
+		`)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query engrams missing pyramids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // GetEngramSummary retrieves a summary for an engram at a specific compression level
