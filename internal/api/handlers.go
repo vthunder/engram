@@ -1213,6 +1213,12 @@ func (s *Services) handleRegenerateEngramPyramids(w http.ResponseWriter, r *http
 	botName := s.BotName
 	logger := s.Logger
 
+	mode := "FULL_REGEN"
+	if missingOnly {
+		mode = "missing_only"
+	}
+	logger.Info("engram pyramid regeneration starting", "mode", mode, "count", count)
+
 	go func() {
 		done, failed := 0, 0
 		for _, id := range engramIDs {
