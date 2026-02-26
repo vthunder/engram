@@ -1532,15 +1532,17 @@ paths:
 
   /v1/schemas/search:
     post:
-      summary: Fetch schema summaries by IDs
+      summary: Search schemas by IDs or semantic query
       description: |
         Supports two modes — exactly one of `ids` or `query` must be provided.
 
-        **ID lookup mode** (`ids`, primary use case): Returns a lightweight summary card for each
-        schema ID, using precomputed summaries at the requested compression level. Results follow
-        request order; unknown IDs are silently skipped.
+        **ID lookup mode** (`ids`): Returns a lightweight summary card for each schema ID, using
+        precomputed summaries at the requested compression level. Results follow request order;
+        unknown IDs are silently skipped.
 
-        **Text search mode** (`query`): Not yet implemented — returns 501.
+        **Text search mode** (`query`): Semantic similarity search via embedding cosine distance.
+        Returns schemas ranked by relevance (threshold 0.5). Use `limit` to control result count
+        (default 10). Results include precomputed summaries at the requested `level`.
       operationId: searchSchemas
       tags:
         - Schemas
@@ -1558,11 +1560,15 @@ paths:
                   description: Schema IDs to fetch (mutually exclusive with `query`)
                 query:
                   type: string
-                  description: Text search (not yet implemented; use `ids` instead)
+                  description: Semantic search query (mutually exclusive with `ids`)
                 level:
                   type: integer
                   default: 32
                   description: "Compression level for the returned summary: 4, 8, 16, 32, 64 (default 32)"
+                limit:
+                  type: integer
+                  default: 10
+                  description: "Maximum results for text search mode (default 10; ignored in ID lookup mode)"
       responses:
         "200":
           description: List of schema summary cards in request order
@@ -1584,8 +1590,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-        "501":
-          description: Text search not yet implemented
+        "503":
+          description: Embedding service not configured
           content:
             application/json:
               schema:

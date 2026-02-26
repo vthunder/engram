@@ -77,12 +77,13 @@ func (s *Services) handleGetSchema(w http.ResponseWriter, r *http.Request) {
 // handleSearchSchemas handles POST /v1/schemas/search.
 // Supports two modes:
 //   - ID lookup: {"ids": [...], "level": 32} — returns schema summaries for given IDs
-//   - Text search: {"query": "..."} — not yet implemented
+//   - Text search: {"query": "...", "limit": 10} — semantic similarity search
 func (s *Services) handleSearchSchemas(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IDs   []string `json:"ids,omitempty"`
 		Query string   `json:"query,omitempty"`
 		Level int      `json:"level,omitempty"`
+		Limit int      `json:"limit,omitempty"`
 	}
 	if err := decode(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -141,7 +142,56 @@ func (s *Services) handleSearchSchemas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeError(w, http.StatusNotImplemented, "not_implemented", "text search for schemas not yet supported; use ids")
+	// Text search mode via embedding similarity
+	if s.EmbedClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "embed_unavailable", "embedding service not configured")
+		return
+	}
+
+	embedding, err := s.EmbedClient.Embed(req.Query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "embed_error", err.Error())
+		return
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	schemas, err := s.Graph.FindSimilarSchemas(embedding, 0.5, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	ids := make([]string, len(schemas))
+	for i, sc := range schemas {
+		ids[i] = sc.ID
+	}
+	summaries, err := s.Graph.GetSchemaSummariesBatch(ids, level)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	type schemaSummaryCard struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Summary string `json:"summary"`
+		Level   int    `json:"level"`
+	}
+	cards := make([]schemaSummaryCard, 0, len(schemas))
+	for _, sc := range schemas {
+		card := schemaSummaryCard{ID: sc.ID, Name: sc.Name, Level: level}
+		if summary, ok := summaries[sc.ID]; ok {
+			card.Summary = summary
+		} else {
+			card.Summary = sc.Name
+		}
+		cards = append(cards, card)
+	}
+	writeJSON(w, http.StatusOK, cards)
 }
 
 // handleBackfillSchemaSummaries handles POST /v1/schemas/backfill-summaries.
