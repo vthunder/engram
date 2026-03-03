@@ -1264,3 +1264,24 @@ func (s *Services) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"time":   time.Now().UTC().Format(time.RFC3339),
 	})
 }
+
+func (s *Services) handleHealthDetailed(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.Graph.GetDBStats()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"time":   time.Now().UTC().Format(time.RFC3339),
+		"db":     stats,
+		"services": map[string]bool{
+			"embedding":        s.EmbedClient != nil,
+			"ner":              s.NERClient != nil,
+			"consolidation":    s.Consolidator != nil,
+			"compression_queue": s.CompressQueue != nil,
+			"schema_induction": s.SchemaInductor != nil,
+		},
+	})
+}

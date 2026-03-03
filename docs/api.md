@@ -11,6 +11,7 @@ A full OpenAPI 3.0 specification is at [`openapi.yaml`](../openapi.yaml).
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Service health check (public) |
+| `GET` | `/health/detailed` | Detailed service health with DB stats (public) |
 | `POST` | `/v1/episodes` | Ingest a raw episode |
 | `GET` | `/v1/episodes` | List episodes; `?channel=`, `?unconsolidated=`, `?before={id}`, `?level=N` |
 | `POST` | `/v1/episodes/search` | Text or ID-lookup search over episodes |
@@ -52,6 +53,41 @@ Response:
 ```json
 {"status": "ok", "time": "2026-02-21T07:00:00Z"}
 ```
+
+```
+GET /health/detailed
+```
+
+Returns service status, DB aggregate counts, and service capability flags. No authentication required.
+
+Response:
+```json
+{
+  "status": "ok",
+  "time": "2026-02-21T07:00:00Z",
+  "db": {
+    "total_engrams": 490,
+    "engrams_by_depth": {"0": 12, "1": 210, "2": 268},
+    "engrams_missing_pyramids": 0,
+    "total_episodes": 3821,
+    "episodes_without_summaries": 14,
+    "total_entities": 87,
+    "total_schemas": 9
+  },
+  "services": {
+    "embedding": true,
+    "ner": false,
+    "consolidation": true,
+    "compression_queue": true,
+    "schema_induction": true
+  }
+}
+```
+
+`engrams_by_depth` is keyed by depth level as a string (`"0"` = L0 raw, `"1"` = L1 consolidated, `"2"` = L2 recursive).
+`engrams_missing_pyramids` counts engrams with no precomputed pyramid summary at level 4 or above.
+`episodes_without_summaries` counts episodes with no precomputed pyramid summaries at any level.
+`services` flags indicate which optional capabilities are active in the running instance.
 
 ---
 

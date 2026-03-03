@@ -755,6 +755,73 @@ func (g *DB) CountEngrams() (total int, err error) {
 	return total, nil
 }
 
+// DBStats holds aggregate counts for the health/detailed endpoint.
+type DBStats struct {
+	TotalEngrams             int            `json:"total_engrams"`
+	EngramsByDepth           map[string]int `json:"engrams_by_depth"`
+	EngramsMissingPyramids   int            `json:"engrams_missing_pyramids"`
+	TotalEpisodes            int            `json:"total_episodes"`
+	EpisodesWithoutSummaries int            `json:"episodes_without_summaries"`
+	TotalEntities            int            `json:"total_entities"`
+	TotalSchemas             int            `json:"total_schemas"`
+}
+
+// GetDBStats returns aggregate counts useful for observability.
+func (g *DB) GetDBStats() (*DBStats, error) {
+	stats := &DBStats{EngramsByDepth: make(map[string]int)}
+
+	if err := g.db.QueryRow(`SELECT COUNT(*) FROM engrams`).Scan(&stats.TotalEngrams); err != nil {
+		return nil, err
+	}
+
+	rows, err := g.db.Query(`SELECT COALESCE(depth, 0), COUNT(*) FROM engrams GROUP BY COALESCE(depth, 0)`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var depth, count int
+		if err := rows.Scan(&depth, &count); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		stats.EngramsByDepth[fmt.Sprintf("%d", depth)] = count
+	}
+	rows.Close()
+
+	if err := g.db.QueryRow(`
+		SELECT COUNT(*) FROM engrams e
+		WHERE NOT EXISTS (
+			SELECT 1 FROM engram_summaries es
+			WHERE es.engram_id = e.id AND es.compression_level >= 4
+		)
+	`).Scan(&stats.EngramsMissingPyramids); err != nil {
+		return nil, err
+	}
+
+	if err := g.db.QueryRow(`SELECT COUNT(*) FROM episodes`).Scan(&stats.TotalEpisodes); err != nil {
+		return nil, err
+	}
+
+	if err := g.db.QueryRow(`
+		SELECT COUNT(*) FROM episodes e
+		WHERE NOT EXISTS (
+			SELECT 1 FROM episode_summaries es WHERE es.episode_id = e.id
+		)
+	`).Scan(&stats.EpisodesWithoutSummaries); err != nil {
+		return nil, err
+	}
+
+	if err := g.db.QueryRow(`SELECT COUNT(*) FROM entities`).Scan(&stats.TotalEntities); err != nil {
+		return nil, err
+	}
+
+	if err := g.db.QueryRow(`SELECT COUNT(*) FROM schemas`).Scan(&stats.TotalSchemas); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
+}
+
 // scanEngram scans a single row into an Engram
 func scanEngram(row *sql.Row) (*Engram, error) {
 	var en Engram

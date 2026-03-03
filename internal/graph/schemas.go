@@ -36,11 +36,21 @@ func (g *DB) AddSchema(s *Schema) error {
 }
 
 // GetSchema retrieves a schema by ID, optionally populating instances.
+// If id is shorter than 32 chars (i.e. an 8-char prefix from the Active Schemas
+// context section), falls back to a LIKE prefix match.
 func (g *DB) GetSchema(id string) (*Schema, error) {
-	row := g.db.QueryRow(`
-		SELECT id, name, content, embedding, is_labile, created_at, updated_at
-		FROM schemas WHERE id = ?
-	`, id)
+	var row *sql.Row
+	if len(id) < 32 {
+		row = g.db.QueryRow(`
+			SELECT id, name, content, embedding, is_labile, created_at, updated_at
+			FROM schemas WHERE id LIKE ? LIMIT 1
+		`, id+"%")
+	} else {
+		row = g.db.QueryRow(`
+			SELECT id, name, content, embedding, is_labile, created_at, updated_at
+			FROM schemas WHERE id = ?
+		`, id)
+	}
 
 	s, err := scanSchema(row)
 	if err != nil || s == nil {
@@ -48,7 +58,7 @@ func (g *DB) GetSchema(id string) (*Schema, error) {
 	}
 
 	// Populate instances
-	instances, err := g.GetSchemaInstances(id)
+	instances, err := g.GetSchemaInstances(s.ID)
 	if err == nil {
 		s.Instances = instances
 	}

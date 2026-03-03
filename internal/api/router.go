@@ -12,8 +12,9 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 
-	// Public health endpoint (no auth)
+	// Public health endpoints (no auth)
 	r.Get("/health", svc.handleHealth)
+	r.Get("/health/detailed", svc.handleHealthDetailed)
 
 	// All v1 routes require authentication
 	r.Group(func(r chi.Router) {
