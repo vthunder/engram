@@ -844,3 +844,72 @@ func TestGetConsolidatedEpisodesWithEmbeddings(t *testing.T) {
 		t.Errorf("Expected 1 episode with offset=1, got %d", len(paged))
 	}
 }
+
+// ---- Schema CRUD ----
+
+func TestGetSchemaByFullID(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	sc := &Schema{
+		ID:      "abcdef1234567890abcdef1234567890",
+		Name:    "Test Schema",
+		Content: "PATTERN: ...",
+	}
+	if err := db.AddSchema(sc); err != nil {
+		t.Fatalf("AddSchema failed: %v", err)
+	}
+
+	got, err := db.GetSchema(sc.ID)
+	if err != nil {
+		t.Fatalf("GetSchema(full ID) failed: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Expected schema, got nil")
+	}
+	if got.Name != sc.Name {
+		t.Errorf("Name mismatch: want %q, got %q", sc.Name, got.Name)
+	}
+}
+
+func TestGetSchemaByPrefix(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	sc := &Schema{
+		ID:      "abcdef1234567890abcdef1234567890",
+		Name:    "Prefix Schema",
+		Content: "PATTERN: prefix test",
+	}
+	if err := db.AddSchema(sc); err != nil {
+		t.Fatalf("AddSchema failed: %v", err)
+	}
+
+	// 8-char prefix — as surfaced in Active Schemas context
+	got, err := db.GetSchema("abcdef12")
+	if err != nil {
+		t.Fatalf("GetSchema(prefix) failed: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Expected schema via prefix, got nil")
+	}
+	if got.ID != sc.ID {
+		t.Errorf("ID mismatch: want %q, got %q", sc.ID, got.ID)
+	}
+	if got.Name != sc.Name {
+		t.Errorf("Name mismatch: want %q, got %q", sc.Name, got.Name)
+	}
+}
+
+func TestGetSchemaNotFound(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	got, err := db.GetSchema("nonexistent-id-that-does-not-exist")
+	if err != nil {
+		t.Fatalf("GetSchema(nonexistent) unexpected error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("Expected nil for nonexistent schema, got %+v", got)
+	}
+}
