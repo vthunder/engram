@@ -572,6 +572,13 @@ func (s *Services) handleListEngrams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	engrams = filterByDepth(engrams, depth)
+
+	// Apply limit if specified
+	limit := parseLimit(r, 0)
+	if limit > 0 && len(engrams) > limit {
+		engrams = engrams[:limit]
+	}
+
 	applyEngramLevels(s.Graph, engrams, level)
 	writeEngramList(w, engrams, full)
 }
