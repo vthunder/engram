@@ -1100,6 +1100,23 @@ func (g *DB) runMigrations() error {
 		log.Println("[graph] Migration to v28 completed: schema_summaries table added")
 	}
 
+	// v29: access_count column for base-level activation bias.
+	// Tracks how many times each engram has been retrieved; used with last_accessed
+	// to compute recency-frequency score in SpreadActivation seed weighting.
+	if version < 29 {
+		stmts := []string{
+			`ALTER TABLE engrams ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0`,
+			`CREATE INDEX IF NOT EXISTS idx_engrams_access_count ON engrams(access_count)`,
+		}
+		for _, sql := range stmts {
+			if _, err := g.db.Exec(sql); err != nil {
+				log.Printf("[graph] Migration v29 error: %v", err)
+			}
+		}
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (29)")
+		log.Println("[graph] Migration to v29 completed: access_count column added")
+	}
+
 	return nil
 }
 

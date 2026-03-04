@@ -138,8 +138,9 @@ type Engram struct {
 	Depth      int        `json:"depth,omitempty"` // Hierarchy depth: 0 = L1 (from episodes), 1 = L2 (from L1s), etc.
 	Topic      string     `json:"topic,omitempty"`
 	EngramType EngramType `json:"engram_type,omitempty"`
-	Activation float64    `json:"activation"`
-	Strength   int        `json:"strength"`
+	Activation  float64    `json:"activation"`
+	AccessCount int        `json:"access_count"`
+	Strength    int        `json:"strength"`
 	Embedding  []float64  `json:"embedding,omitempty"`
 	EventTime    time.Time  `json:"event_time"`    // MAX(timestamp_event) of source episodes
 	CreatedAt    time.Time  `json:"created_at"`

@@ -2,6 +2,7 @@ package graph
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"sort"
@@ -40,6 +41,10 @@ const (
 
 	// Seed boost for matched traces
 	SeedBoost = 0.5 // additive boost for seed nodes
+
+	// Base-level activation bias parameters (ACT-R-inspired recency-frequency scoring)
+	BaseActivationWeight    = 0.5  // how much base-level bias scales the seed boost (0 = disabled)
+	BaseActivationDecayDays = 30.0 // recency half-life in days
 )
 
 // GetAllEngramActivations returns current activation values for all traces
@@ -73,6 +78,60 @@ func (g *DB) PersistActivations(activations map[string]float64) error {
 	return nil
 }
 
+// computeBaseActivations loads access_count and last_accessed for a set of engram IDs
+// and returns a normalized 0-1 base-level score for each.
+// Score formula: log(access_count+1) * exp(-decay * days_since_access)
+// Scores are normalized relative to the max in the set, so the bias is proportional.
+func (g *DB) computeBaseActivations(ids []string) map[string]float64 {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1]
+	query := fmt.Sprintf(
+		`SELECT id, access_count, last_accessed FROM engrams WHERE id IN (%s)`,
+		placeholders,
+	)
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := g.db.Query(query, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	raw := make(map[string]float64, len(ids))
+	maxScore := 0.0
+	for rows.Next() {
+		var id string
+		var accessCount int
+		var lastAccessed time.Time
+		if err := rows.Scan(&id, &accessCount, &lastAccessed); err != nil {
+			continue
+		}
+		daysSince := now.Sub(lastAccessed).Hours() / 24.0
+		score := math.Log(float64(accessCount)+1) * math.Exp(-daysSince/BaseActivationDecayDays)
+		raw[id] = score
+		if score > maxScore {
+			maxScore = score
+		}
+	}
+
+	if maxScore == 0 {
+		return raw // all zeros; normalization would divide by zero
+	}
+
+	normalized := make(map[string]float64, len(raw))
+	for id, score := range raw {
+		normalized[id] = score / maxScore
+	}
+	return normalized
+}
+
 // SpreadActivation performs spreading activation from seed nodes
 // Implements Synapse-style algorithm with per-iteration decay, fan effect, and lateral inhibition
 // Returns a map of node IDs to activation levels
@@ -84,10 +143,19 @@ func (g *DB) SpreadActivation(seedIDs []string, iterations int) (map[string]floa
 	// Initialize activation map - start fresh each query
 	activation := make(map[string]float64)
 
+	// Compute base-level activation scores for seeds (recency × frequency bias).
+	// Seeds that have been accessed often and recently get a higher initial boost.
+	baseScores := g.computeBaseActivations(seedIDs)
+
 	// Track which nodes are seeds (they get protection from full decay)
 	seedSet := make(map[string]bool)
 	for _, id := range seedIDs {
-		activation[id] = SeedBoost
+		seedBoost := SeedBoost
+		if baseScore, ok := baseScores[id]; ok && baseScore > 0 {
+			// Scale boost up by up to BaseActivationWeight (0.5) based on normalized recency-frequency
+			seedBoost = SeedBoost * (1 + BaseActivationWeight*baseScore)
+		}
+		activation[id] = seedBoost
 		seedSet[id] = true
 	}
 

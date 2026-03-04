@@ -379,6 +379,7 @@ func (g *DB) BoostEngramAccess(engramIDs []string, boost float64) error {
 		_, err := g.db.Exec(`
 			UPDATE engrams SET
 				last_accessed = ?,
+				access_count = access_count + 1,
 				activation = MIN(1.0, activation + ?)
 			WHERE id = ?
 		`, now, boost, id)
