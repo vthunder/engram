@@ -99,7 +99,7 @@ func (si *SchemaInductor) InduceSchemas(ctx context.Context) (int, error) {
 	log.Printf("[schema-inductor] induction complete: %d schemas created/updated", total)
 
 	// Post-induction deduplication: merge schemas that are near-duplicates.
-	if mergeCount, err := si.deduplicateSchemas(ctx); err != nil {
+	if mergeCount, err := si.deduplicateSchemas(ctx, 0.75); err != nil {
 		log.Printf("[schema-inductor] deduplication error: %v", err)
 	} else if mergeCount > 0 {
 		log.Printf("[schema-inductor] deduplication merged %d near-duplicate schemas", mergeCount)
@@ -257,16 +257,25 @@ func (si *SchemaInductor) reconsolidateSchema(ctx context.Context, s *graph.Sche
 	return 1, nil
 }
 
-// deduplicateSchemas merges near-duplicate schemas (cosine sim >= 0.88).
+// DeduplicateSchemas merges near-duplicate schemas with cosine sim >= threshold.
 // For each duplicate pair, instances are reassigned to the older schema and
 // the newer schema is deleted. Returns the number of schemas merged away.
-func (si *SchemaInductor) deduplicateSchemas(ctx context.Context) (int, error) {
+// threshold=0 uses the default value of 0.75.
+func (si *SchemaInductor) DeduplicateSchemas(ctx context.Context, threshold float64) (int, error) {
+	if threshold <= 0 {
+		threshold = 0.75
+	}
+	return si.deduplicateSchemas(ctx, threshold)
+}
+
+// deduplicateSchemas merges near-duplicate schemas (cosine sim >= threshold).
+// For each duplicate pair, instances are reassigned to the older schema and
+// the newer schema is deleted. Returns the number of schemas merged away.
+func (si *SchemaInductor) deduplicateSchemas(ctx context.Context, threshold float64) (int, error) {
 	schemas, err := si.graph.ListSchemas()
 	if err != nil {
 		return 0, fmt.Errorf("listing schemas for dedup: %w", err)
 	}
-
-	const dedupThreshold = 0.88
 
 	// Track which schemas have been deleted so we skip them in later iterations
 	deleted := make(map[string]bool)
@@ -287,7 +296,7 @@ func (si *SchemaInductor) deduplicateSchemas(ctx context.Context) (int, error) {
 				continue
 			}
 			sim := cosineSim(schemas[i].Embedding, schemas[j].Embedding)
-			if sim < dedupThreshold {
+			if sim < threshold {
 				continue
 			}
 
@@ -324,6 +333,169 @@ func (si *SchemaInductor) deduplicateSchemas(ctx context.Context) (int, error) {
 		}
 	}
 
+	return merged, nil
+}
+
+// DeduplicateSchemasWithLLM uses an LLM to identify and merge semantically equivalent schemas.
+// Unlike embedding-based dedup, this catches schemas with similar meaning but different wording.
+//
+// Algorithm:
+//  1. Pre-filter candidate pairs using embedding similarity >= embThreshold (cheap, avoids O(n²) LLM calls).
+//  2. Batch all candidate pairs into a single LLM prompt asking which are true semantic duplicates.
+//  3. Merge the confirmed duplicates (keep the older schema, delete the newer one).
+//
+// embThreshold=0 uses 0.60. Returns the number of schemas merged away.
+func (si *SchemaInductor) DeduplicateSchemasWithLLM(ctx context.Context, embThreshold float64) (int, error) {
+	if embThreshold <= 0 {
+		embThreshold = 0.60
+	}
+
+	schemas, err := si.graph.ListSchemas()
+	if err != nil {
+		return 0, fmt.Errorf("listing schemas for llm-dedup: %w", err)
+	}
+	if len(schemas) < 2 {
+		return 0, nil
+	}
+
+	// Step 1: pre-filter candidate pairs by embedding distance.
+	type pair struct{ i, j int }
+	var candidates []pair
+	for i := 0; i < len(schemas); i++ {
+		if len(schemas[i].Embedding) == 0 {
+			continue
+		}
+		for j := i + 1; j < len(schemas); j++ {
+			if len(schemas[j].Embedding) == 0 {
+				continue
+			}
+			if cosineSim(schemas[i].Embedding, schemas[j].Embedding) >= embThreshold {
+				candidates = append(candidates, pair{i, j})
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		log.Printf("[schema-inductor] llm-dedup: no candidate pairs above threshold %.2f", embThreshold)
+		return 0, nil
+	}
+	log.Printf("[schema-inductor] llm-dedup: %d candidate pairs to evaluate (of %d schemas)", len(candidates), len(schemas))
+
+	// Step 2: ask the LLM which pairs are true duplicates.
+	// Build a compact representation of each schema: name + first 3 GENERALIZATIONS lines.
+	schemaSnippet := func(s *graph.Schema) string {
+		var lines []string
+		inSection := false
+		count := 0
+		for _, line := range strings.Split(s.Content, "\n") {
+			if strings.HasPrefix(line, "## GENERALIZATIONS") || strings.HasPrefix(line, "# GENERALIZATIONS") {
+				inSection = true
+				continue
+			}
+			if inSection {
+				if strings.HasPrefix(line, "#") {
+					break // next section
+				}
+				trimmed := strings.TrimSpace(line)
+				if trimmed != "" && strings.HasPrefix(trimmed, "-") {
+					lines = append(lines, trimmed)
+					count++
+					if count >= 3 {
+						break
+					}
+				}
+			}
+		}
+		if len(lines) == 0 {
+			return s.Name
+		}
+		return s.Name + ": " + strings.Join(lines, "; ")
+	}
+
+	var sb strings.Builder
+	sb.WriteString("You are evaluating pairs of memory schemas to identify true semantic duplicates.\n\n")
+	sb.WriteString("A schema describes a recurring pattern or activity type. Two schemas are DUPLICATES if they\n")
+	sb.WriteString("describe the same pattern, even if named differently or emphasizing different aspects.\n\n")
+	sb.WriteString("Examples of DUPLICATES:\n")
+	sb.WriteString("  - \"Service Deployment Migration\" vs \"Service Deployment & Configuration Management\"\n")
+	sb.WriteString("  - \"System Reliability Hardening Cycle\" vs \"System Reliability & Observability Hardening\"\n\n")
+	sb.WriteString("Examples of NOT DUPLICATES:\n")
+	sb.WriteString("  - \"Memory System Debugging\" vs \"Service Deployment Migration\" (different activities)\n")
+	sb.WriteString("  - \"Sprint Planning\" vs \"Retrospective\" (same domain, different events)\n\n")
+	sb.WriteString("SCHEMA PAIRS TO EVALUATE:\n\n")
+
+	for idx, p := range candidates {
+		a, b := schemas[p.i], schemas[p.j]
+		sb.WriteString(fmt.Sprintf("Pair %d:\n", idx))
+		sb.WriteString(fmt.Sprintf("  A: %s\n", schemaSnippet(a)))
+		sb.WriteString(fmt.Sprintf("  B: %s\n", schemaSnippet(b)))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("Output JSON only — a list of pair indices (0-based) that are true duplicates:\n")
+	sb.WriteString("[0, 2, 5]\n")
+	sb.WriteString("If no pairs are duplicates, output: []\n")
+
+	raw, err := si.llm.Generate(ctx, sb.String())
+	if err != nil {
+		return 0, fmt.Errorf("LLM dedup call failed: %w", err)
+	}
+
+	// Parse response: expect a JSON array of integers (pair indices).
+	jsonStr := strings.TrimSpace(raw)
+	// Strip code fences if present.
+	if i := strings.Index(jsonStr, "["); i >= 0 {
+		jsonStr = jsonStr[i:]
+	}
+	if i := strings.LastIndex(jsonStr, "]"); i >= 0 {
+		jsonStr = jsonStr[:i+1]
+	}
+	var dupIndices []int
+	if err := json.Unmarshal([]byte(jsonStr), &dupIndices); err != nil {
+		return 0, fmt.Errorf("failed to parse LLM dedup response: %w (raw: %.300s)", err, raw)
+	}
+
+	// Step 3: merge confirmed duplicates.
+	deleted := make(map[string]bool)
+	merged := 0
+	for _, idx := range dupIndices {
+		if idx < 0 || idx >= len(candidates) {
+			continue
+		}
+		p := candidates[idx]
+		keeper, dup := schemas[p.i], schemas[p.j]
+		if deleted[keeper.ID] || deleted[dup.ID] {
+			continue
+		}
+
+		instances, err := si.graph.GetSchemaInstances(dup.ID)
+		if err != nil {
+			log.Printf("[schema-inductor] llm-dedup: failed to get instances for %s: %v", dup.ID[:8], err)
+			continue
+		}
+		for _, inst := range instances {
+			newInst := &graph.SchemaInstance{
+				SchemaID:  keeper.ID,
+				EngramID:  inst.EngramID,
+				IsAnomaly: inst.IsAnomaly,
+				MatchedAt: inst.MatchedAt,
+			}
+			if err := si.graph.AddSchemaInstance(newInst); err != nil {
+				log.Printf("[schema-inductor] llm-dedup: failed to reassign instance: %v", err)
+			}
+		}
+
+		if err := si.graph.DeleteSchema(dup.ID); err != nil {
+			log.Printf("[schema-inductor] llm-dedup: failed to delete schema %s: %v", dup.ID[:8], err)
+			continue
+		}
+
+		log.Printf("[schema-inductor] llm-dedup: merged %q (%s) into %q (%s)",
+			dup.Name, dup.ID[:8], keeper.Name, keeper.ID[:8])
+		deleted[dup.ID] = true
+		merged++
+	}
+
+	log.Printf("[schema-inductor] llm-dedup: merged %d schemas (from %d LLM-confirmed pairs)", merged, len(dupIndices))
 	return merged, nil
 }
 

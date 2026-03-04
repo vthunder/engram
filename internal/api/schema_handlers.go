@@ -206,6 +206,51 @@ func (s *Services) handleBackfillSchemaSummaries(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, map[string]any{"backfilled": n})
 }
 
+// handleDeduplicateSchemas handles POST /v1/schemas/dedup.
+// Runs a deduplication pass over all schemas, merging pairs above the threshold.
+// Body: {"threshold": 0.75} — defaults to 0.75 if omitted.
+func (s *Services) handleDeduplicateSchemas(w http.ResponseWriter, r *http.Request) {
+	if s.SchemaInductor == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_configured", "schema induction not configured")
+		return
+	}
+
+	var req struct {
+		Threshold float64 `json:"threshold"`
+	}
+	// ignore decode errors — empty body is fine (uses default)
+	_ = decode(r, &req)
+
+	merged, err := s.SchemaInductor.DeduplicateSchemas(r.Context(), req.Threshold)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "dedup_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"merged": merged})
+}
+
+// handleDeduplicateSchemasWithLLM handles POST /v1/schemas/dedup-llm.
+// Uses LLM semantic judgement to identify and merge duplicate schemas.
+// Body: {"embedding_threshold": 0.60} — pre-filter threshold, defaults to 0.60 if omitted.
+func (s *Services) handleDeduplicateSchemasWithLLM(w http.ResponseWriter, r *http.Request) {
+	if s.SchemaInductor == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_configured", "schema induction not configured")
+		return
+	}
+
+	var req struct {
+		EmbeddingThreshold float64 `json:"embedding_threshold"`
+	}
+	_ = decode(r, &req)
+
+	merged, err := s.SchemaInductor.DeduplicateSchemasWithLLM(r.Context(), req.EmbeddingThreshold)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "dedup_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"merged": merged})
+}
+
 // handleDeleteSchema handles DELETE /v1/schemas/{id}.
 func (s *Services) handleDeleteSchema(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

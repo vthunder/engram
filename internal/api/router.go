@@ -58,6 +58,8 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 		r.Get("/v1/schemas/{id}", svc.handleGetSchema)
 		r.Delete("/v1/schemas/{id}", svc.handleDeleteSchema)
 		r.Post("/v1/schemas/induce", svc.handleInduceSchemas)
+		r.Post("/v1/schemas/dedup", svc.handleDeduplicateSchemas)
+		r.Post("/v1/schemas/dedup-llm", svc.handleDeduplicateSchemasWithLLM)
 		r.Post("/v1/schemas/backfill-summaries", svc.handleBackfillSchemaSummaries)
 
 		// Activation
