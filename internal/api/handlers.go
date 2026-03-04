@@ -504,6 +504,17 @@ func (s *Services) handleSearchEngrams(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "retrieval_error", err.Error())
 		return
 	}
+
+	// Wire up the feedback loop: boost access for retrieved engrams so
+	// last_accessed stays current and activation reflects actual usage.
+	if len(result.Engrams) > 0 {
+		ids := make([]string, len(result.Engrams))
+		for i, e := range result.Engrams {
+			ids[i] = e.ID
+		}
+		go s.Graph.BoostEngramAccess(ids, 0.05) //nolint:errcheck
+	}
+
 	applyEngramLevels(s.Graph, result.Engrams, req.Level)
 	populateSchemaIDs(s.Graph, result.Engrams)
 	if full {
