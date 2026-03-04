@@ -706,8 +706,8 @@ func TestDecayActivationByAge(t *testing.T) {
 	addTestEngram(t, db, &Engram{ID: "tr-decay-new", Summary: "New", Activation: 0.9})
 	// last_accessed is now (set by AddEngram)
 
-	// Decay with lambda=0.005 (gentle)
-	count, err := db.DecayActivationByAge(0.005, 0.01)
+	// Decay with lambda=0.005 (gentle), 1-hour step
+	count, err := db.DecayActivationByAge(0.005, 0.01, 1.0)
 	if err != nil {
 		t.Fatalf("DecayActivationByAge failed: %v", err)
 	}
@@ -727,7 +727,7 @@ func TestDecayActivationByAge(t *testing.T) {
 	addTestEngram(t, db, &Engram{ID: "tr-decay-kn", Summary: "Knowledge", Activation: 0.9, EngramType: EngramTypeKnowledge})
 	db.TestSetEngramTimestamp("tr-decay-kn", time.Now().Add(-24*time.Hour))
 
-	db.DecayActivationByAge(0.005, 0.01)
+	db.DecayActivationByAge(0.005, 0.01, 1.0)
 
 	op, _ := db.GetEngram("tr-decay-op")
 	kn, _ := db.GetEngram("tr-decay-kn")

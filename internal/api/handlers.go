@@ -1122,15 +1122,21 @@ func (s *Services) handleGetEntityEngrams(w http.ResponseWriter, r *http.Request
 // --- Activation ---
 
 type decayRequest struct {
-	Lambda float64 `json:"lambda,omitempty"`
-	Floor  float64 `json:"floor,omitempty"`
+	Lambda        float64 `json:"lambda,omitempty"`
+	Floor         float64 `json:"floor,omitempty"`
+	IntervalHours float64 `json:"interval_hours,omitempty"`
 }
 
 func (s *Services) handleDecayActivation(w http.ResponseWriter, r *http.Request) {
 	var req decayRequest
 	_ = decode(r, &req) // optional body
 
-	updated, err := s.Graph.DecayActivationByAge(req.Lambda, req.Floor)
+	intervalHours := req.IntervalHours
+	if intervalHours <= 0 {
+		intervalHours = 1.0 // default: 1-hour step
+	}
+
+	updated, err := s.Graph.DecayActivationByAge(req.Lambda, req.Floor, intervalHours)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
 		return

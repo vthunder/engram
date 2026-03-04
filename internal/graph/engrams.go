@@ -316,12 +316,12 @@ func (g *DB) DecayActivation(factor float64) error {
 	return err
 }
 
-// DecayActivationByAge applies time-based decay to all engrams based on time since last access.
-func (g *DB) DecayActivationByAge(lambda float64, floor float64) (int, error) {
-	now := time.Now()
-
+// DecayActivationByAge applies time-based decay to all engrams for one decay interval.
+// intervalHours is the time step (scheduler interval) so each call decays by exactly
+// one step, preventing compounding when the same engram is decayed across multiple runs.
+func (g *DB) DecayActivationByAge(lambda float64, floor float64, intervalHours float64) (int, error) {
 	rows, err := g.db.Query(`
-		SELECT id, activation, last_accessed, COALESCE(engram_type, 'knowledge')
+		SELECT id, activation, COALESCE(engram_type, 'knowledge')
 		FROM engrams WHERE activation > ?
 	`, floor)
 	if err != nil {
@@ -338,15 +338,9 @@ func (g *DB) DecayActivationByAge(lambda float64, floor float64) (int, error) {
 	for rows.Next() {
 		var id string
 		var activation float64
-		var lastAccessed time.Time
 		var engramType string
-		if err := rows.Scan(&id, &activation, &lastAccessed, &engramType); err != nil {
+		if err := rows.Scan(&id, &activation, &engramType); err != nil {
 			continue
-		}
-
-		hoursSinceAccess := now.Sub(lastAccessed).Hours()
-		if hoursSinceAccess < 0 {
-			hoursSinceAccess = 0
 		}
 
 		effectiveLambda := lambda
@@ -354,7 +348,7 @@ func (g *DB) DecayActivationByAge(lambda float64, floor float64) (int, error) {
 			effectiveLambda = lambda * 3
 		}
 
-		decayFactor := math.Exp(-effectiveLambda * hoursSinceAccess)
+		decayFactor := math.Exp(-effectiveLambda * intervalHours)
 		newActivation := activation * decayFactor
 		if newActivation < floor {
 			newActivation = floor

@@ -259,7 +259,7 @@ func runDecay(ctx context.Context, db *graph.DB, cfg config.DecayConfig, logger 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			updated, err := db.DecayActivationByAge(cfg.Lambda, cfg.Floor)
+			updated, err := db.DecayActivationByAge(cfg.Lambda, cfg.Floor, cfg.Interval.Hours())
 			if err != nil {
 				logger.Warn("background decay failed", "err", err)
 			} else if updated > 0 {
