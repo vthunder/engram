@@ -409,6 +409,31 @@ func (g *DB) GetEngramSummary(engramID string, level int) (*EngramSummary, error
 	return nil, nil
 }
 
+// GetEngramSummaries retrieves all pyramid summaries for a single engram, ordered by
+// compression level descending (L64 first, L4 last).
+func (g *DB) GetEngramSummaries(engramID string) ([]*EngramSummary, error) {
+	rows, err := g.db.Query(`
+		SELECT id, engram_id, compression_level, summary, tokens
+		FROM engram_summaries
+		WHERE engram_id = ?
+		ORDER BY compression_level DESC
+	`, engramID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query engram summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []*EngramSummary
+	for rows.Next() {
+		var s EngramSummary
+		if err := rows.Scan(&s.ID, &s.EngramID, &s.CompressionLevel, &s.Summary, &s.Tokens); err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, &s)
+	}
+	return summaries, rows.Err()
+}
+
 // GetEngramSummariesBatch retrieves summaries for multiple engrams at the nearest available
 // level >= target. Returns a map of engram_id -> *EngramSummary.
 func (g *DB) GetEngramSummariesBatch(engramIDs []string, level int) (map[string]*EngramSummary, error) {

@@ -1269,6 +1269,39 @@ func (s *Services) handleRegenerateEngramPyramids(w http.ResponseWriter, r *http
 	})
 }
 
+// handleRegenerateEngramPyramid regenerates the pyramid summaries (L4–L64) for a single engram.
+// Runs synchronously and returns the updated summaries. Optional query params:
+//   - ?mode=from_source  — generate L32/L16 from original source instead of cascading
+func (s *Services) handleRegenerateEngramPyramid(w http.ResponseWriter, r *http.Request) {
+	if s.CompressQueue == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_configured", "compression not configured")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	fromSource := r.URL.Query().Get("mode") == "from_source"
+
+	if err := s.Graph.RegenerateEngramPyramid(id, s.CompressQueue.Compressor(), s.BotName, fromSource); err != nil {
+		writeError(w, http.StatusInternalServerError, "regen_failed", err.Error())
+		return
+	}
+
+	summaries, err := s.Graph.GetEngramSummaries(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+
+	mode := "cascade"
+	if fromSource {
+		mode = "from_source"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":        id,
+		"mode":      mode,
+		"summaries": summaries,
+	})
+}
+
 func (s *Services) handleFlush(w http.ResponseWriter, r *http.Request) {
 	if s.Consolidator != nil {
 		if _, err := s.Consolidator.Run(); err != nil {
