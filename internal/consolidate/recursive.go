@@ -290,7 +290,7 @@ func (c *Consolidator) consolidateEngramGroup(ctx context.Context, group []*grap
 	if c.llm != nil {
 		if compressor, ok := c.llm.(graph.Compressor); ok {
 			go func() {
-				if err := c.graph.GenerateEngramPyramidFromEngrams(engramID, group, compressor, c.BotName); err != nil {
+				if err := c.graph.GenerateEngramPyramidFromEngrams(engramID, group, compressor, c.BotName, false); err != nil {
 					log.Printf("[recursive] failed to generate pyramid for L%d engram %s: %v",
 						targetDepth+1, engramID[:8], err)
 				}

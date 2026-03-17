@@ -520,9 +520,12 @@ func (g *DB) GenerateEngramSummaryLevel(engramID string, level int, sourceEpisod
 	return nil
 }
 
-// GenerateEngramPyramid creates cascading summaries (L64→L32→L16→L8→L4) for an engram
-// from its source episodes. Uses cascading approach for consistency.
-func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, compressor Compressor) error {
+// GenerateEngramPyramid creates summaries (L64→L32→L16→L8→L4) for an engram from its
+// source episodes. When fromSource is false (default), uses cascading: each level
+// compresses the previous level's output. When fromSource is true, L64/L32/L16 each
+// compress the original source directly (better quality for large models); L8/L4 still
+// cascade from L16 (extreme ratios from raw source produce worse results at those levels).
+func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, compressor Compressor, fromSource bool) error {
 	if compressor == nil || len(sourceEpisodes) == 0 {
 		return fmt.Errorf("compressor and source episodes required")
 	}
@@ -542,8 +545,14 @@ func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, c
 		return fmt.Errorf("failed to store L64 summary: %w", err)
 	}
 
-	l64Words := estimateWordCount(l64Summary)
-	l32Summary, err := compressTraceToTarget(l64Summary, compressor, 32, l64Words, "")
+	var l32Input string
+	var l32Words int
+	if fromSource {
+		l32Input, l32Words = sourceContext, wordCount
+	} else {
+		l32Input, l32Words = l64Summary, estimateWordCount(l64Summary)
+	}
+	l32Summary, err := compressTraceToTarget(l32Input, compressor, 32, l32Words, "")
 	if err != nil {
 		return fmt.Errorf("L32 compression failed: %w", err)
 	}
@@ -551,8 +560,14 @@ func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, c
 		return fmt.Errorf("failed to store L32 summary: %w", err)
 	}
 
-	l32Words := estimateWordCount(l32Summary)
-	l16Summary, err := compressTraceToTarget(l32Summary, compressor, 16, l32Words, "")
+	var l16Input string
+	var l16Words int
+	if fromSource {
+		l16Input, l16Words = sourceContext, wordCount
+	} else {
+		l16Input, l16Words = l32Summary, estimateWordCount(l32Summary)
+	}
+	l16Summary, err := compressTraceToTarget(l16Input, compressor, 16, l16Words, "")
 	if err != nil {
 		return fmt.Errorf("L16 compression failed: %w", err)
 	}
@@ -560,8 +575,8 @@ func (g *DB) GenerateEngramPyramid(engramID string, sourceEpisodes []*Episode, c
 		return fmt.Errorf("failed to store L16 summary: %w", err)
 	}
 
-	l16Words := estimateWordCount(l16Summary)
-	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16Words, "")
+	l16OutWords := estimateWordCount(l16Summary)
+	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16OutWords, "")
 	if err != nil {
 		return fmt.Errorf("L8 compression failed: %w", err)
 	}
@@ -747,12 +762,14 @@ func (g *DB) GenerateEntityPyramid(entityID string, compressor Compressor) error
 	return nil
 }
 
-// GenerateEngramPyramidFromEngrams creates cascading summaries (L64→L32→L16→L8→L4) for an
-// L2+ engram whose "sources" are other engrams (not episodes). Uses the full uncompressed
+// GenerateEngramPyramidFromEngrams creates summaries (L64→L32→L16→L8→L4) for an L2+
+// engram whose "sources" are other engrams (not episodes). Uses the full uncompressed
 // summary of each source engram as the context (analogous to how L1 engrams use full
 // episode content). botName, if non-empty, is injected into compression prompts so the
 // local LLM correctly preserves first-person voice for bot-authored content.
-func (g *DB) GenerateEngramPyramidFromEngrams(engramID string, sourceEngrams []*Engram, compressor Compressor, botName string) error {
+// When fromSource is true, L32 and L16 compress from the original source context rather
+// than cascading from L64/L32; L8/L4 still cascade from L16.
+func (g *DB) GenerateEngramPyramidFromEngrams(engramID string, sourceEngrams []*Engram, compressor Compressor, botName string, fromSource bool) error {
 	if compressor == nil || len(sourceEngrams) == 0 {
 		return fmt.Errorf("compressor and source engrams required")
 	}
@@ -776,8 +793,14 @@ func (g *DB) GenerateEngramPyramidFromEngrams(engramID string, sourceEngrams []*
 		return fmt.Errorf("failed to store L64 summary: %w", err)
 	}
 
-	l64Words := estimateWordCount(l64Summary)
-	l32Summary, err := compressTraceToTarget(l64Summary, compressor, 32, l64Words, botName)
+	var l32Input string
+	var l32Words int
+	if fromSource {
+		l32Input, l32Words = sourceContext, wordCount
+	} else {
+		l32Input, l32Words = l64Summary, estimateWordCount(l64Summary)
+	}
+	l32Summary, err := compressTraceToTarget(l32Input, compressor, 32, l32Words, botName)
 	if err != nil {
 		return fmt.Errorf("L32 compression failed: %w", err)
 	}
@@ -785,8 +808,14 @@ func (g *DB) GenerateEngramPyramidFromEngrams(engramID string, sourceEngrams []*
 		return fmt.Errorf("failed to store L32 summary: %w", err)
 	}
 
-	l32Words := estimateWordCount(l32Summary)
-	l16Summary, err := compressTraceToTarget(l32Summary, compressor, 16, l32Words, botName)
+	var l16Input string
+	var l16Words int
+	if fromSource {
+		l16Input, l16Words = sourceContext, wordCount
+	} else {
+		l16Input, l16Words = l32Summary, estimateWordCount(l32Summary)
+	}
+	l16Summary, err := compressTraceToTarget(l16Input, compressor, 16, l16Words, botName)
 	if err != nil {
 		return fmt.Errorf("L16 compression failed: %w", err)
 	}
@@ -794,8 +823,8 @@ func (g *DB) GenerateEngramPyramidFromEngrams(engramID string, sourceEngrams []*
 		return fmt.Errorf("failed to store L16 summary: %w", err)
 	}
 
-	l16Words := estimateWordCount(l16Summary)
-	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16Words, botName)
+	l16OutWords := estimateWordCount(l16Summary)
+	l8Summary, err := compressTraceToTarget(l16Summary, compressor, 8, l16OutWords, botName)
 	if err != nil {
 		return fmt.Errorf("L8 compression failed: %w", err)
 	}
@@ -819,7 +848,9 @@ func (g *DB) GenerateEngramPyramidFromEngrams(engramID string, sourceEngrams []*
 // the current compression prompts. For L1 engrams (depth=0), rebuilds from source episodes;
 // for L2+ engrams, rebuilds from source engrams. The L0 (verbatim) summary is preserved.
 // Existing L4–L64 summaries are overwritten via upsert.
-func (g *DB) RegenerateEngramPyramid(engramID string, compressor Compressor, botName string) error {
+// When fromSource is true, L32 and L16 are generated from the original source context
+// rather than cascading from L64/L32.
+func (g *DB) RegenerateEngramPyramid(engramID string, compressor Compressor, botName string, fromSource bool) error {
 	if compressor == nil {
 		return fmt.Errorf("compressor required")
 	}
@@ -845,7 +876,7 @@ func (g *DB) RegenerateEngramPyramid(engramID string, compressor Compressor, bot
 		if len(episodes) == 0 {
 			return fmt.Errorf("engram %s: source episodes not found", engramID)
 		}
-		return g.GenerateEngramPyramid(engramID, episodes, compressor)
+		return g.GenerateEngramPyramid(engramID, episodes, compressor, fromSource)
 	}
 
 	// L2+: rebuild from source engrams
@@ -856,7 +887,7 @@ func (g *DB) RegenerateEngramPyramid(engramID string, compressor Compressor, bot
 	if len(sourceEngrams) == 0 {
 		return fmt.Errorf("engram %s has no source engrams", engramID)
 	}
-	return g.GenerateEngramPyramidFromEngrams(engramID, sourceEngrams, compressor, botName)
+	return g.GenerateEngramPyramidFromEngrams(engramID, sourceEngrams, compressor, botName, fromSource)
 }
 
 // buildTraceCompressionPrompt constructs a prompt for trace compression to target word count.

@@ -406,7 +406,7 @@ func (g *DB) RegeneratePyramidSummaries(engramID string, baseSummary string, com
 			for i := range sourceEpisodes {
 				eps[i] = &sourceEpisodes[i]
 			}
-			if err := g.GenerateEngramPyramid(engramID, eps, compressor); err != nil {
+			if err := g.GenerateEngramPyramid(engramID, eps, compressor, false); err != nil {
 				log.Printf("[pyramid] engram %s: %v", engramID[:8], err)
 			}
 		}()

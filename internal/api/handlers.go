@@ -1199,8 +1199,9 @@ func (s *Services) handleBoostEngrams(w http.ResponseWriter, r *http.Request) {
 // engrams (or a depth-filtered subset) using the current compression prompts.
 // The operation runs in the background; the endpoint returns immediately with a count of
 // engrams queued. Optional query params:
-//   - ?depth=0       — process only L1 engrams
+//   - ?depth=0           — process only L1 engrams
 //   - ?missing_only=true — skip engrams that already have pyramid summaries
+//   - ?mode=from_source  — generate L32/L16 from original source instead of cascading
 func (s *Services) handleRegenerateEngramPyramids(w http.ResponseWriter, r *http.Request) {
 	if s.CompressQueue == nil {
 		writeError(w, http.StatusServiceUnavailable, "not_configured", "compression not configured")
@@ -1210,6 +1211,7 @@ func (s *Services) handleRegenerateEngramPyramids(w http.ResponseWriter, r *http
 
 	depth := parseDepth(r)
 	missingOnly := r.URL.Query().Get("missing_only") == "true"
+	fromSource := r.URL.Query().Get("mode") == "from_source"
 
 	var engramIDs []string
 
@@ -1241,25 +1243,29 @@ func (s *Services) handleRegenerateEngramPyramids(w http.ResponseWriter, r *http
 	if missingOnly {
 		mode = "missing_only"
 	}
+	if fromSource {
+		mode += "+from_source"
+	}
 	logger.Info("engram pyramid regeneration starting", "mode", mode, "count", count)
 
 	go func() {
 		done, failed := 0, 0
 		for _, id := range engramIDs {
-			if err := s.Graph.RegenerateEngramPyramid(id, compressor, botName); err != nil {
+			if err := s.Graph.RegenerateEngramPyramid(id, compressor, botName, fromSource); err != nil {
 				logger.Warn("pyramid regen failed", "id", id, "err", err)
 				failed++
 				continue
 			}
 			done++
 		}
-		logger.Info("engram pyramid regeneration complete", "done", done, "failed", failed, "total", count, "missing_only", missingOnly)
+		logger.Info("engram pyramid regeneration complete", "done", done, "failed", failed, "total", count, "missing_only", missingOnly, "from_source", fromSource)
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"started":      count,
 		"depth":        depth,
 		"missing_only": missingOnly,
+		"mode":         mode,
 	})
 }
 
