@@ -199,14 +199,15 @@ func parseLimit(r *http.Request, def int) int {
 // --- Ingest ---
 
 type ingestEpisodeRequest struct {
-	Content        string    `json:"content"`
-	Source         string    `json:"source"`
-	Author         string    `json:"author,omitempty"`
-	AuthorID       string    `json:"author_id,omitempty"`
-	Channel        string    `json:"channel,omitempty"`
-	TimestampEvent time.Time `json:"timestamp_event,omitempty"`
-	ReplyTo        string    `json:"reply_to,omitempty"`
-	Embedding      []float64 `json:"embedding,omitempty"`
+	Content        string           `json:"content"`
+	Source         string           `json:"source"`
+	Author         string           `json:"author,omitempty"`
+	AuthorID       string           `json:"author_id,omitempty"`
+	Channel        string           `json:"channel,omitempty"`
+	TimestampEvent time.Time        `json:"timestamp_event,omitempty"`
+	ReplyTo        string           `json:"reply_to,omitempty"`
+	Embedding      []float64        `json:"embedding,omitempty"`
+	Attachments    []map[string]any `json:"attachments,omitempty"`
 }
 
 func (s *Services) handleIngestEpisode(w http.ResponseWriter, r *http.Request) {
@@ -248,6 +249,7 @@ func (s *Services) handleIngestEpisode(w http.ResponseWriter, r *http.Request) {
 		TimestampEvent: req.TimestampEvent,
 		ReplyTo:        req.ReplyTo,
 		Embedding:      emb,
+		Attachments:    req.Attachments,
 	}
 
 	if err := s.Graph.AddEpisode(ep); err != nil {

@@ -27,6 +27,14 @@ func (g *DB) AddEpisode(ep *Episode) error {
 		embeddingBytes = nil
 	}
 
+	var attachmentsBytes []byte
+	if len(ep.Attachments) > 0 {
+		attachmentsBytes, err = json.Marshal(ep.Attachments)
+		if err != nil {
+			attachmentsBytes = nil
+		}
+	}
+
 	if ep.TimestampIngested.IsZero() {
 		ep.TimestampIngested = time.Now()
 	}
@@ -42,8 +50,8 @@ func (g *DB) AddEpisode(ep *Episode) error {
 	_, err = g.db.Exec(`
 		INSERT INTO episodes (id, content, token_count, source, author, author_id, channel,
 			timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
-			embedding, reply_to, authorization_checked, has_authorization, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			embedding, reply_to, authorization_checked, has_authorization, created_at, attachments)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			content = excluded.content,
 			token_count = excluded.token_count,
@@ -54,7 +62,7 @@ func (g *DB) AddEpisode(ep *Episode) error {
 	`,
 		ep.ID, ep.Content, ep.TokenCount, ep.Source, ep.Author, ep.AuthorID, ep.Channel,
 		ep.TimestampEvent, ep.TimestampIngested, ep.DialogueAct, ep.EntropyScore,
-		embeddingBytes, ep.ReplyTo, ep.AuthorizationChecked, ep.HasAuthorization, ep.CreatedAt,
+		embeddingBytes, ep.ReplyTo, ep.AuthorizationChecked, ep.HasAuthorization, ep.CreatedAt, attachmentsBytes,
 	)
 
 	if err != nil {
@@ -81,7 +89,7 @@ func (g *DB) GetAllEpisodes(limit int) ([]*Episode, error) {
 	rows, err := g.db.Query(`
 		SELECT id, content, token_count, source, author, author_id, channel,
 			timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
-			embedding, reply_to, authorization_checked, has_authorization, created_at
+			embedding, reply_to, authorization_checked, has_authorization, created_at, attachments
 		FROM episodes
 		ORDER BY timestamp_event DESC
 		LIMIT ?
@@ -111,7 +119,7 @@ func (g *DB) SearchEpisodesByText(query string, limit int) ([]*Episode, error) {
 	rows, err := g.db.Query(`
 		SELECT id, content, token_count, source, author, author_id, channel,
 			timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
-			embedding, reply_to, authorization_checked, has_authorization, created_at
+			embedding, reply_to, authorization_checked, has_authorization, created_at, attachments
 		FROM episodes
 		WHERE content LIKE '%' || ? || '%'
 		ORDER BY timestamp_event DESC
@@ -145,7 +153,7 @@ func (g *DB) GetEpisode(id string) (*Episode, error) {
 	row := g.db.QueryRow(`
 		SELECT id, content, token_count, source, author, author_id, channel,
 			timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
-			embedding, reply_to, authorization_checked, has_authorization, created_at
+			embedding, reply_to, authorization_checked, has_authorization, created_at, attachments
 		FROM episodes WHERE id = ?
 	`, id)
 
@@ -160,7 +168,7 @@ func (g *DB) GetEpisodes(ids []string) ([]*Episode, error) {
 
 	query := `SELECT id, content, token_count, source, author, author_id, channel,
 		timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
-		embedding, reply_to, authorization_checked, has_authorization, created_at FROM episodes WHERE id IN (`
+		embedding, reply_to, authorization_checked, has_authorization, created_at, attachments FROM episodes WHERE id IN (`
 	args := make([]interface{}, len(ids))
 	for i, id := range ids {
 		if i > 0 {
@@ -202,7 +210,7 @@ func (g *DB) GetRecentEpisodes(channel string, limit int) ([]*Episode, error) {
 		rows, err = g.db.Query(`
 			SELECT id, content, token_count, source, author, author_id, channel,
 				timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
-				reply_to, authorization_checked, has_authorization, created_at
+				reply_to, authorization_checked, has_authorization, created_at, attachments
 			FROM episodes
 			WHERE channel = ?
 			ORDER BY timestamp_event DESC
@@ -212,7 +220,7 @@ func (g *DB) GetRecentEpisodes(channel string, limit int) ([]*Episode, error) {
 		rows, err = g.db.Query(`
 			SELECT id, content, token_count, source, author, author_id, channel,
 				timestamp_event, timestamp_ingested, dialogue_act, entropy_score,
-				reply_to, authorization_checked, has_authorization, created_at
+				reply_to, authorization_checked, has_authorization, created_at, attachments
 			FROM episodes
 			ORDER BY timestamp_event DESC
 			LIMIT ?
@@ -241,7 +249,7 @@ func (g *DB) GetEpisodeReplies(id string) ([]*Episode, error) {
 	rows, err := g.db.Query(`
 		SELECT e.id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
 			e.timestamp_event, e.timestamp_ingested, e.dialogue_act, e.entropy_score,
-			e.embedding, e.reply_to, e.authorization_checked, e.has_authorization, e.created_at
+			e.embedding, e.reply_to, e.authorization_checked, e.has_authorization, e.created_at, e.attachments
 		FROM episodes e
 		INNER JOIN episode_edges ee ON ee.from_id = e.id
 		WHERE ee.to_id = ? AND ee.edge_type = ?
@@ -345,7 +353,7 @@ func (g *DB) GetUnconsolidatedEpisodes(limit int) ([]*Episode, error) {
 	rows, err := g.db.Query(`
 		SELECT e.id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
 			e.timestamp_event, e.timestamp_ingested, e.dialogue_act, e.entropy_score,
-			e.embedding, e.reply_to, e.authorization_checked, e.has_authorization, e.created_at
+			e.embedding, e.reply_to, e.authorization_checked, e.has_authorization, e.created_at, e.attachments
 		FROM episodes e
 		LEFT JOIN engram_episodes ee ON ee.episode_id = e.id
 		WHERE ee.engram_id IS NULL
@@ -378,7 +386,7 @@ func (g *DB) GetConsolidatedEpisodesWithEmbeddings(offset, limit int) ([]*Episod
 	rows, err := g.db.Query(`
 		SELECT DISTINCT e.id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
 			e.timestamp_event, e.timestamp_ingested, e.dialogue_act, e.entropy_score,
-			e.embedding, e.reply_to, e.authorization_checked, e.has_authorization, e.created_at
+			e.embedding, e.reply_to, e.authorization_checked, e.has_authorization, e.created_at, e.attachments
 		FROM episodes e
 		INNER JOIN engram_episodes ee ON ee.episode_id = e.id
 		WHERE e.embedding IS NOT NULL
@@ -569,11 +577,12 @@ func scanEpisode(row *sql.Row) (*Episode, error) {
 	var author, authorID, channel, dialogueAct, replyTo sql.NullString
 	var entropyScore sql.NullFloat64
 	var authChecked, hasAuth sql.NullBool
+	var attachmentsBytes []byte
 
 	err := row.Scan(
 		&ep.ID, &ep.Content, &ep.TokenCount, &ep.Source, &author, &authorID, &channel,
 		&ep.TimestampEvent, &ep.TimestampIngested, &dialogueAct, &entropyScore,
-		&embeddingBytes, &replyTo, &authChecked, &hasAuth, &ep.CreatedAt,
+		&embeddingBytes, &replyTo, &authChecked, &hasAuth, &ep.CreatedAt, &attachmentsBytes,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -594,6 +603,9 @@ func scanEpisode(row *sql.Row) (*Episode, error) {
 	if len(embeddingBytes) > 0 {
 		json.Unmarshal(embeddingBytes, &ep.Embedding)
 	}
+	if len(attachmentsBytes) > 0 {
+		json.Unmarshal(attachmentsBytes, &ep.Attachments)
+	}
 
 	return &ep, nil
 }
@@ -605,11 +617,12 @@ func scanEpisodeRow(rows *sql.Rows) (*Episode, error) {
 	var author, authorID, channel, dialogueAct, replyTo sql.NullString
 	var entropyScore sql.NullFloat64
 	var authChecked, hasAuth sql.NullBool
+	var attachmentsBytes []byte
 
 	err := rows.Scan(
 		&ep.ID, &ep.Content, &ep.TokenCount, &ep.Source, &author, &authorID, &channel,
 		&ep.TimestampEvent, &ep.TimestampIngested, &dialogueAct, &entropyScore,
-		&embeddingBytes, &replyTo, &authChecked, &hasAuth, &ep.CreatedAt,
+		&embeddingBytes, &replyTo, &authChecked, &hasAuth, &ep.CreatedAt, &attachmentsBytes,
 	)
 	if err != nil {
 		return nil, err
@@ -627,6 +640,9 @@ func scanEpisodeRow(rows *sql.Rows) (*Episode, error) {
 	if len(embeddingBytes) > 0 {
 		json.Unmarshal(embeddingBytes, &ep.Embedding)
 	}
+	if len(attachmentsBytes) > 0 {
+		json.Unmarshal(attachmentsBytes, &ep.Attachments)
+	}
 
 	return &ep, nil
 }
@@ -637,11 +653,12 @@ func scanEpisodeRowNoEmbedding(rows *sql.Rows) (*Episode, error) {
 	var author, authorID, channel, dialogueAct, replyTo sql.NullString
 	var entropyScore sql.NullFloat64
 	var authChecked, hasAuth sql.NullBool
+	var attachmentsBytes []byte
 
 	err := rows.Scan(
 		&ep.ID, &ep.Content, &ep.TokenCount, &ep.Source, &author, &authorID, &channel,
 		&ep.TimestampEvent, &ep.TimestampIngested, &dialogueAct, &entropyScore,
-		&replyTo, &authChecked, &hasAuth, &ep.CreatedAt,
+		&replyTo, &authChecked, &hasAuth, &ep.CreatedAt, &attachmentsBytes,
 	)
 	if err != nil {
 		return nil, err
@@ -655,6 +672,10 @@ func scanEpisodeRowNoEmbedding(rows *sql.Rows) (*Episode, error) {
 	ep.EntropyScore = entropyScore.Float64
 	ep.AuthorizationChecked = authChecked.Bool
 	ep.HasAuthorization = hasAuth.Bool
+
+	if len(attachmentsBytes) > 0 {
+		json.Unmarshal(attachmentsBytes, &ep.Attachments)
+	}
 
 	return &ep, nil
 }

@@ -1117,6 +1117,17 @@ func (g *DB) runMigrations() error {
 		log.Println("[graph] Migration to v29 completed: access_count column added")
 	}
 
+	// v30: Add attachments column to episodes for storing Discord CDN URLs.
+	// Stores a JSON array of {filename, content_type, url} objects so attachment URLs
+	// survive pyramid compression and can be retrieved via query_episode.
+	if version < 30 {
+		if _, err := g.db.Exec(`ALTER TABLE episodes ADD COLUMN attachments TEXT`); err != nil {
+			log.Printf("[graph] Migration v30 error: %v", err)
+		}
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (30)")
+		log.Println("[graph] Migration to v30 completed: attachments column added to episodes")
+	}
+
 	return nil
 }
 

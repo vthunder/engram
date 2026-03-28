@@ -102,10 +102,11 @@ type Episode struct {
 	DialogueAct          string    `json:"dialogue_act,omitempty"`
 	EntropyScore         float64   `json:"entropy_score,omitempty"`
 	Embedding            []float64 `json:"embedding,omitempty"`
-	ReplyTo              string    `json:"reply_to,omitempty"`
-	AuthorizationChecked bool      `json:"authorization_checked"` // Whether authorization check has been performed
-	HasAuthorization     bool      `json:"has_authorization"`     // Whether authorization was detected
-	CreatedAt            time.Time `json:"created_at"`
+	ReplyTo              string           `json:"reply_to,omitempty"`
+	AuthorizationChecked bool             `json:"authorization_checked"` // Whether authorization check has been performed
+	HasAuthorization     bool             `json:"has_authorization"`     // Whether authorization was detected
+	CreatedAt            time.Time        `json:"created_at"`
+	Attachments          []map[string]any `json:"attachments,omitempty"` // CDN URLs for image/file attachments
 }
 
 // Entity represents an extracted named entity (Tier 2)
