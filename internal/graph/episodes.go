@@ -497,7 +497,7 @@ func (g *DB) GetEpisodesFiltered(channel string, beforeTimestamp *time.Time, unc
 	sb.WriteString(`
 		SELECT e.id, e.content, e.token_count, e.source, e.author, e.author_id, e.channel,
 			e.timestamp_event, e.timestamp_ingested, e.dialogue_act, e.entropy_score,
-			e.reply_to, e.authorization_checked, e.has_authorization, e.created_at
+			e.reply_to, e.authorization_checked, e.has_authorization, e.created_at, e.attachments
 		FROM episodes e`)
 
 	if unconsolidatedOnly {
