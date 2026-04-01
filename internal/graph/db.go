@@ -27,31 +27,56 @@ type entityCacheEntry struct {
 	patterns []*regexp.Regexp // pre-compiled patterns, one per name/alias (nil = skip short names)
 }
 
-// DB wraps the SQLite database connection for the memory graph
+// DB wraps the SQLite database connection for the memory graph.
+// It maintains three physical database files:
+//   - memory.db      (g.db)      — main source-of-truth: episodes, engrams, entities, schemas
+//   - memory-vectors.db (g.vectors) — embedding BLOBs + vec0 virtual table (recomputable)
+//   - memory-cache.db   (g.cache)   — summary pyramids: episode/engram/schema_summaries (recomputable)
+//
+// The secondary databases are also ATTACHed to the main connection under the schema names
+// "vectors" and "cache", so that correlated subqueries across tables work transparently.
 type DB struct {
-	db           *sql.DB
-	path         string
-	vecAvailable bool
-	vecDim       int // embedding dimension used in engram_vec (0 = not yet determined)
+	db              *sql.DB // memory.db — main connection (MaxOpenConns=1 for stable ATTACH)
+	vectors         *sql.DB // memory-vectors.db — embedding BLOBs + engram_vec
+	cache           *sql.DB // memory-cache.db — summary pyramids
+	path            string
+	vectorsPath     string
+	cachePath       string
+	vecAvailable    bool
+	vecDim          int  // embedding dimension used in engram_vec (0 = not yet determined)
+	embeddingInMain bool // true if engrams.embedding column still exists (pre-v31)
 
 	// Entity lookup cache: rebuilt lazily, invalidated on entity writes.
 	entityCacheMu sync.RWMutex
 	entityCache   []entityCacheEntry // nil means cache needs rebuild
 }
 
-// Open opens or creates the memory graph database
-func Open(statePath string) (*DB, error) {
-	dbPath := filepath.Join(statePath, "system", "memory.db")
+// Open opens or creates the memory graph database.
+// statePath is the directory that will contain memory.db, memory-vectors.db, memory-cache.db.
+// Callers may pass vectorsPath/cachePath as overrides; if empty, defaults are derived from statePath.
+func Open(statePath string, extraPaths ...string) (*DB, error) {
+	// Derive paths: statePath/memory.db, statePath/memory-vectors.db, statePath/memory-cache.db
+	dbPath := filepath.Join(statePath, "memory.db")
+	vectorsPath := filepath.Join(statePath, "memory-vectors.db")
+	cachePath := filepath.Join(statePath, "memory-cache.db")
+	if len(extraPaths) >= 1 && extraPaths[0] != "" {
+		vectorsPath = extraPaths[0]
+	}
+	if len(extraPaths) >= 2 && extraPaths[1] != "" {
+		cachePath = extraPaths[1]
+	}
 
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
+	// Open main DB with MaxOpenConns(1) so ATTACH statements persist on the same connection.
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 
 	// Test connection
 	if err := db.Ping(); err != nil {
@@ -59,19 +84,76 @@ func Open(statePath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	// Enable foreign keys
+	// Enable foreign keys on main DB
 	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
 
-	g := &DB{db: db, path: dbPath}
-
-	// Run migrations
-	if err := g.migrate(); err != nil {
+	// Open secondary DBs (independent connections for isolated writes/maintenance).
+	vectors, err := sql.Open("sqlite3", vectorsPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	if err != nil {
 		db.Close()
+		return nil, fmt.Errorf("failed to open vectors database: %w", err)
+	}
+	vectors.SetMaxOpenConns(1)
+
+	cache, err := sql.Open("sqlite3", cachePath+"?_journal_mode=WAL&_busy_timeout=5000")
+	if err != nil {
+		db.Close()
+		vectors.Close()
+		return nil, fmt.Errorf("failed to open cache database: %w", err)
+	}
+	cache.SetMaxOpenConns(1)
+
+	// ATTACH secondary DBs to the main connection so cross-table queries work.
+	// Tables in attached schemas are accessible as "vectors.tablename" and "cache.tablename",
+	// but unqualified names also resolve when the table doesn't exist in main.
+	if _, err := db.Exec(fmt.Sprintf(`ATTACH DATABASE %q AS vectors`, vectorsPath)); err != nil {
+		db.Close()
+		vectors.Close()
+		cache.Close()
+		return nil, fmt.Errorf("failed to attach vectors database: %w", err)
+	}
+	if _, err := db.Exec(fmt.Sprintf(`ATTACH DATABASE %q AS cache`, cachePath)); err != nil {
+		db.Close()
+		vectors.Close()
+		cache.Close()
+		return nil, fmt.Errorf("failed to attach cache database: %w", err)
+	}
+
+	// Enable WAL on attached databases
+	db.Exec(`PRAGMA vectors.journal_mode = WAL`)
+	db.Exec(`PRAGMA cache.journal_mode = WAL`)
+
+	g := &DB{
+		db:          db,
+		vectors:     vectors,
+		cache:       cache,
+		path:        dbPath,
+		vectorsPath: vectorsPath,
+		cachePath:   cachePath,
+	}
+
+	// Initialize secondary DB schemas (idempotent)
+	if err := g.initVectorsSchema(); err != nil {
+		g.Close()
+		return nil, fmt.Errorf("failed to init vectors schema: %w", err)
+	}
+	if err := g.initCacheSchema(); err != nil {
+		g.Close()
+		return nil, fmt.Errorf("failed to init cache schema: %w", err)
+	}
+
+	// Run migrations on main DB
+	if err := g.migrate(); err != nil {
+		g.Close()
 		return nil, fmt.Errorf("failed to migrate: %w", err)
 	}
+
+	// Check if embedding column still exists in main.engrams.
+	// For v31+, the column is kept for read compatibility but writes also go to vectors DB.
+	g.embeddingInMain = g.columnExistsInMain("engrams", "embedding")
 
 	// Check if sqlite-vec extension is available
 	var vecVersion string
@@ -92,9 +174,86 @@ func Open(statePath string) (*DB, error) {
 	return g, nil
 }
 
-// Close closes the database connection
+// initVectorsSchema creates tables in memory-vectors.db (idempotent).
+func (g *DB) initVectorsSchema() error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS episode_embeddings (id TEXT PRIMARY KEY, embedding BLOB)`,
+		`CREATE TABLE IF NOT EXISTS engram_embeddings (id TEXT PRIMARY KEY, embedding BLOB)`,
+		`CREATE TABLE IF NOT EXISTS schema_embeddings (id TEXT PRIMARY KEY, embedding BLOB)`,
+	}
+	for _, s := range stmts {
+		if _, err := g.vectors.Exec(s); err != nil {
+			return fmt.Errorf("vectors schema: %w", err)
+		}
+	}
+	return nil
+}
+
+// initCacheSchema creates tables in memory-cache.db (idempotent).
+// No FK constraints because the referenced tables live in a different DB.
+func (g *DB) initCacheSchema() error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS episode_summaries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			episode_id TEXT NOT NULL,
+			compression_level INTEGER NOT NULL,
+			summary TEXT NOT NULL,
+			tokens INTEGER NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(episode_id, compression_level)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_episode_summaries_episode ON episode_summaries(episode_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_episode_summaries_level ON episode_summaries(compression_level)`,
+		`CREATE TABLE IF NOT EXISTS engram_summaries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			engram_id TEXT NOT NULL,
+			compression_level INTEGER NOT NULL,
+			summary TEXT NOT NULL,
+			tokens INTEGER NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(engram_id, compression_level)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_engram_summaries_engram ON engram_summaries(engram_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_engram_summaries_level ON engram_summaries(compression_level)`,
+		`CREATE TABLE IF NOT EXISTS schema_summaries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			schema_id TEXT NOT NULL,
+			compression_level INTEGER NOT NULL,
+			summary TEXT NOT NULL,
+			tokens INTEGER NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(schema_id, compression_level)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_schema_summaries_schema ON schema_summaries(schema_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_schema_summaries_level ON schema_summaries(compression_level)`,
+	}
+	for _, s := range stmts {
+		if _, err := g.cache.Exec(s); err != nil {
+			return fmt.Errorf("cache schema: %w", err)
+		}
+	}
+	return nil
+}
+
+// Close closes all three database connections.
 func (g *DB) Close() error {
-	return g.db.Close()
+	var firstErr error
+	if g.cache != nil {
+		if err := g.cache.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if g.vectors != nil {
+		if err := g.vectors.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if g.db != nil {
+		if err := g.db.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // TestSetEngramTimestamp updates the last_accessed timestamp for an engram (for testing only)
@@ -1128,18 +1287,178 @@ func (g *DB) runMigrations() error {
 		log.Println("[graph] Migration to v30 completed: attachments column added to episodes")
 	}
 
+	// v31: Multi-DB split — move embeddings to memory-vectors.db and summaries to memory-cache.db.
+	// Data is copied to the attached schemas; then embedding columns and summary tables are dropped
+	// from main. The engram_vec virtual table is dropped from main (it will live in vectors schema).
+	// This migration is idempotent: it checks for the presence of each column/table before acting.
+	if version < 31 {
+		log.Println("[graph] Migrating to schema v31: multi-DB split (embeddings → vectors, summaries → cache)")
+		if err := g.runMultiDBMigration(); err != nil {
+			log.Printf("[graph] Migration v31 warning: %v — continuing", err)
+		}
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (31)")
+		log.Println("[graph] Migration to v31 completed: multi-DB split")
+	}
+
+	return nil
+}
+
+// columnExistsInMain checks whether a column exists in a table in the main schema.
+func (g *DB) columnExistsInMain(table, col string) bool {
+	rows, err := g.db.Query(fmt.Sprintf("PRAGMA main.table_info(%s)", table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt interface{}
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err == nil && name == col {
+			return true
+		}
+	}
+	return false
+}
+
+// tableExistsInMain checks whether a table exists in the main schema.
+func (g *DB) tableExistsInMain(table string) bool {
+	var count int
+	err := g.db.QueryRow(
+		`SELECT COUNT(*) FROM main.sqlite_master WHERE type='table' AND name=?`, table,
+	).Scan(&count)
+	return err == nil && count > 0
+}
+
+// runMultiDBMigration performs the v31 data migration:
+// copies embeddings from main→vectors schema, summaries from main→cache schema,
+// then drops those columns/tables from main. Idempotent (checks column/table existence).
+func (g *DB) runMultiDBMigration() error {
+	columnExists := g.columnExistsInMain
+	tableExists := g.tableExistsInMain
+
+	// 1. Copy embeddings to vectors schema (via the ATTACHed connection)
+	if columnExists("engrams", "embedding") {
+		if _, err := g.db.Exec(`
+			INSERT OR IGNORE INTO vectors.engram_embeddings (id, embedding)
+			SELECT id, embedding FROM main.engrams WHERE embedding IS NOT NULL
+		`); err != nil {
+			log.Printf("[graph] v31: copy engram embeddings: %v", err)
+		} else {
+			log.Println("[graph] v31: engram embeddings copied to vectors DB")
+		}
+	}
+	if columnExists("episodes", "embedding") {
+		if _, err := g.db.Exec(`
+			INSERT OR IGNORE INTO vectors.episode_embeddings (id, embedding)
+			SELECT id, embedding FROM main.episodes WHERE embedding IS NOT NULL
+		`); err != nil {
+			log.Printf("[graph] v31: copy episode embeddings: %v", err)
+		} else {
+			log.Println("[graph] v31: episode embeddings copied to vectors DB")
+		}
+	}
+	if columnExists("schemas", "embedding") {
+		if _, err := g.db.Exec(`
+			INSERT OR IGNORE INTO vectors.schema_embeddings (id, embedding)
+			SELECT id, embedding FROM main.schemas WHERE embedding IS NOT NULL
+		`); err != nil {
+			log.Printf("[graph] v31: copy schema embeddings: %v", err)
+		} else {
+			log.Println("[graph] v31: schema embeddings copied to vectors DB")
+		}
+	}
+
+	// 2. Copy summaries to cache schema (via the ATTACHed connection)
+	if tableExists("episode_summaries") {
+		if _, err := g.db.Exec(`
+			INSERT OR IGNORE INTO cache.episode_summaries (episode_id, compression_level, summary, tokens, created_at)
+			SELECT episode_id, compression_level, summary, tokens, created_at FROM main.episode_summaries
+		`); err != nil {
+			log.Printf("[graph] v31: copy episode_summaries: %v", err)
+		} else {
+			log.Println("[graph] v31: episode_summaries copied to cache DB")
+		}
+	}
+	if tableExists("engram_summaries") {
+		if _, err := g.db.Exec(`
+			INSERT OR IGNORE INTO cache.engram_summaries (engram_id, compression_level, summary, tokens, created_at)
+			SELECT engram_id, compression_level, summary, tokens, created_at FROM main.engram_summaries
+		`); err != nil {
+			log.Printf("[graph] v31: copy engram_summaries: %v", err)
+		} else {
+			log.Println("[graph] v31: engram_summaries copied to cache DB")
+		}
+	}
+	if tableExists("schema_summaries") {
+		if _, err := g.db.Exec(`
+			INSERT OR IGNORE INTO cache.schema_summaries (schema_id, compression_level, summary, tokens, created_at)
+			SELECT schema_id, compression_level, summary, tokens, created_at FROM main.schema_summaries
+		`); err != nil {
+			log.Printf("[graph] v31: copy schema_summaries: %v", err)
+		} else {
+			log.Println("[graph] v31: schema_summaries copied to cache DB")
+		}
+	}
+
+	// 3. Drop FTS triggers that reference engram_summaries in main (they'd reference a dropped table)
+	for _, trigger := range []string{"engram_summaries_ai", "engram_summaries_au", "engram_summaries_ad"} {
+		g.db.Exec(fmt.Sprintf("DROP TRIGGER IF EXISTS %s", trigger))
+	}
+
+	// 4. Drop summary tables from main
+	for _, tbl := range []string{"episode_summaries", "engram_summaries", "schema_summaries"} {
+		if tableExists(tbl) {
+			if _, err := g.db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tbl)); err != nil {
+				log.Printf("[graph] v31: drop %s: %v", tbl, err)
+			}
+		}
+	}
+
+	// 5. Drop engram_vec from main (will be recreated in vectors schema)
+	g.db.Exec(`DROP TABLE IF EXISTS engram_vec`)
+
+	// 6. NULL out embedding columns in main to reclaim space (data is now in vectors DB).
+	// Queries that previously read main.engrams.embedding now use vectors.engram_embeddings.
+	if columnExists("engrams", "embedding") {
+		g.db.Exec(`UPDATE engrams SET embedding = NULL WHERE embedding IS NOT NULL`)
+		log.Println("[graph] v31: nulled engrams.embedding in main DB")
+	}
+	if columnExists("episodes", "embedding") {
+		g.db.Exec(`UPDATE episodes SET embedding = NULL WHERE embedding IS NOT NULL`)
+		log.Println("[graph] v31: nulled episodes.embedding in main DB")
+	}
+	if columnExists("schemas", "embedding") {
+		g.db.Exec(`UPDATE schemas SET embedding = NULL WHERE embedding IS NOT NULL`)
+		log.Println("[graph] v31: nulled schemas.embedding in main DB")
+	}
+
+	// VACUUM to reclaim freed pages (embedding BLOBs are ~130MB).
+	log.Println("[graph] v31: running VACUUM to reclaim embedding space (this may take a moment)...")
+	g.db.Exec(`VACUUM`)
+
+	log.Println("[graph] v31: multi-DB split migration complete")
 	return nil
 }
 
 // initVecTableFromEngrams reads the embedding dimension from existing engrams, creates the
 // engram_vec virtual table with that dimension (if it doesn't already exist), and backfills
 // all existing engram embeddings. No-ops if no engrams with embeddings exist yet.
+// After v31, embeddings live in the vectors.engram_embeddings table; the vec table is in vectors schema.
 func (g *DB) initVecTableFromEngrams() error {
-	// Read one embedding to determine dimension
+	if g.vectors == nil {
+		return nil
+	}
+	// Try to read dimension from engram_embeddings in vectors DB first (post-v31)
 	var embBytes []byte
-	err := g.db.QueryRow(`SELECT embedding FROM engrams WHERE embedding IS NOT NULL AND LENGTH(embedding) > 4 LIMIT 1`).Scan(&embBytes)
+	err := g.vectors.QueryRow(`SELECT embedding FROM engram_embeddings WHERE embedding IS NOT NULL AND LENGTH(embedding) > 4 LIMIT 1`).Scan(&embBytes)
 	if err != nil {
-		return nil // no engrams with embeddings yet; defer to first AddEngram
+		// Fall back to main.engrams.embedding (pre-v31 or during migration)
+		err = g.db.QueryRow(`SELECT embedding FROM engrams WHERE embedding IS NOT NULL AND LENGTH(embedding) > 4 LIMIT 1`).Scan(&embBytes)
+		if err != nil {
+			return nil // no engrams with embeddings yet; defer to first AddEngram
+		}
 	}
 	var emb64 []float64
 	if err := json.Unmarshal(embBytes, &emb64); err != nil || len(emb64) == 0 {
@@ -1148,8 +1467,9 @@ func (g *DB) initVecTableFromEngrams() error {
 	return g.ensureVecTable(len(emb64))
 }
 
-// ensureVecTable creates the engram_vec virtual table for the given embedding dimension
-// (if not yet created) and backfills all existing engrams. Idempotent for the same dim.
+// ensureVecTable creates the engram_vec virtual table in the vectors schema for the given
+// embedding dimension (if not yet created) and backfills all existing engrams.
+// Idempotent for the same dim.
 //
 // Schema uses integer rowid (from the engrams table) + auxiliary +engram_id column,
 // avoiding vec0's TEXT PRIMARY KEY partitioning behaviour which breaks KNN queries.
@@ -1161,22 +1481,50 @@ func (g *DB) ensureVecTable(dim int) error {
 		return fmt.Errorf("embedding dim %d doesn't match vec table dim %d", dim, g.vecDim)
 	}
 
+	// Create engram_vec in the vectors attached schema (accessible via unqualified name after ATTACH)
 	_, err := g.db.Exec(fmt.Sprintf(`
-		CREATE VIRTUAL TABLE IF NOT EXISTS engram_vec USING vec0(
+		CREATE VIRTUAL TABLE IF NOT EXISTS vectors.engram_vec USING vec0(
 			embedding float[%d],
 			+engram_id TEXT
 		)
 	`, dim))
 	if err != nil {
-		return fmt.Errorf("failed to create engram_vec(float[%d]): %w", dim, err)
+		return fmt.Errorf("failed to create vectors.engram_vec(float[%d]): %w", dim, err)
 	}
 	g.vecDim = dim
 
-	rows, err := g.db.Query(`SELECT rowid, id, embedding FROM engrams WHERE embedding IS NOT NULL`)
+	// Backfill from engram_embeddings in vectors schema (post-v31 layout).
+	// The rowid must match main.engrams.rowid for KNN to work — join via engram_id.
+	rows, err := g.db.Query(`
+		SELECT e.rowid, e.id, ee.embedding
+		FROM main.engrams e
+		JOIN vectors.engram_embeddings ee ON ee.id = e.id
+		WHERE ee.embedding IS NOT NULL
+	`)
 	if err != nil {
-		return nil // backfill failure is non-fatal
+		// Fall back: try main.engrams.embedding (pre-v31)
+		rows, err = g.db.Query(`SELECT rowid, id, embedding FROM engrams WHERE embedding IS NOT NULL`)
+		if err != nil {
+			return nil // backfill failure is non-fatal
+		}
 	}
-	defer rows.Close()
+	// Collect all rows into memory before closing — required because g.db has
+	// MaxOpenConns(1), so calling g.db.Begin() while rows holds the connection
+	// would deadlock (Begin blocks waiting for the connection rows already owns).
+	type engramRow struct {
+		rowid int64
+		id    string
+		emb   []byte
+	}
+	var collected []engramRow
+	for rows.Next() {
+		var r engramRow
+		if err := rows.Scan(&r.rowid, &r.id, &r.emb); err != nil {
+			continue
+		}
+		collected = append(collected, r)
+	}
+	rows.Close()
 
 	tx, err := g.db.Begin()
 	if err != nil {
@@ -1184,15 +1532,9 @@ func (g *DB) ensureVecTable(dim int) error {
 	}
 
 	var count int
-	for rows.Next() {
-		var rowid int64
-		var id string
-		var emb []byte
-		if err := rows.Scan(&rowid, &id, &emb); err != nil {
-			continue
-		}
+	for _, r := range collected {
 		var emb64 []float64
-		if err := json.Unmarshal(emb, &emb64); err != nil || len(emb64) != dim {
+		if err := json.Unmarshal(r.emb, &emb64); err != nil || len(emb64) != dim {
 			continue
 		}
 		emb32 := normalizeFloat32(float64ToFloat32(emb64))
@@ -1200,12 +1542,12 @@ func (g *DB) ensureVecTable(dim int) error {
 		if serErr != nil {
 			continue
 		}
-		if _, err := tx.Exec(`DELETE FROM engram_vec WHERE rowid = ?`, rowid); err != nil {
-			log.Printf("[graph] vec backfill delete failed for %s: %v", id, err)
+		if _, err := tx.Exec(`DELETE FROM vectors.engram_vec WHERE rowid = ?`, r.rowid); err != nil {
+			log.Printf("[graph] vec backfill delete failed for %s: %v", r.id, err)
 			continue
 		}
-		if _, err := tx.Exec(`INSERT INTO engram_vec(rowid, embedding, engram_id) VALUES (?, ?, ?)`, rowid, serialized, id); err != nil {
-			log.Printf("[graph] vec backfill failed for %s: %v", id, err)
+		if _, err := tx.Exec(`INSERT INTO vectors.engram_vec(rowid, embedding, engram_id) VALUES (?, ?, ?)`, r.rowid, serialized, r.id); err != nil {
+			log.Printf("[graph] vec backfill failed for %s: %v", r.id, err)
 			continue
 		}
 		count++
