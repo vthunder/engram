@@ -7,7 +7,7 @@ Topics span modules — signals are the max across constituent modules.
 |------|-------|-------|-------------|---------|--------|
 | 1 | Spreading Activation Retrieval | 0.98 | `internal/graph` | centrality 24 (max), no doc, 30 commits/90d, 17 fix-commits | generated |
 | 2 | Memory Consolidation Pipeline | 0.96 | `internal/consolidate`, `internal/graph` | centrality 24, no doc, 15+30 commits, 8+17 fix-commits | missing |
-| 3 | Episode Ingestion & NER Pipeline | 0.91 | `internal/api`, `internal/ner`, `internal/graph` | centrality 24, no doc, 37 commits/90d (API highest churn), 17 fix-commits | missing |
+| 3 | Episode Ingestion & NER Pipeline | 0.91 | `internal/api`, `internal/ner`, `internal/graph` | centrality 24, no doc, 37 commits/90d (API highest churn), 17 fix-commits. Source: `id-design.md` | missing |
 | 4 | Engram Decay & Activation Mechanics | 0.88 | `internal/graph`, `cmd/engram` | centrality 24, no doc, 30 commits, 17 fix-commits; (foundational) | missing |
 | 5 | Schema Induction & Forward Matching | 0.82 | `internal/schema`, `internal/consolidate`, `internal/graph` | centrality 24, no doc, 7 schema commits + 30 graph, 4+17 fix-commits | missing |
 | 6 | Pyramid Compression | 0.78 | `internal/graph`, `internal/consolidate` | centrality 24, no doc, compress_queue high churn, 17 fix-commits | missing |
