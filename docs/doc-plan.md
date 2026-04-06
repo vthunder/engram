@@ -14,11 +14,11 @@ Topics span modules — signals are the max across constituent modules.
 | 7 | Multi-Database Architecture | 0.76 | `internal/graph`, `config`, `cmd/engram` | centrality 24, no doc, 3-DB split is non-obvious runtime constraint; (foundational) | generated |
 | 8 | MCP Tool Dispatch | 0.73 | `internal/mcp`, `internal/graph` | centrality 24 (via graph), no doc, 5 commits, stdio transport pattern | generated |
 | 9 | Conversation Context Buffer | 0.67 | `internal/api`, `internal/graph` | centrality 24, no doc, channel-based pagination + compression levels | generated |
-| 10 | Embedding & Vector KNN | 0.63 | `internal/embed`, `internal/graph` | centrality 24, no doc, sqlite-vec extension integration | missing |
+| 10 | Embedding & Vector KNN | 0.63 | `internal/embed`, `internal/graph` | centrality 24, no doc, sqlite-vec extension integration | generated |
 
 ## Recommended next
 
-Run `dev:arch-doc "Embedding & Vector KNN"` on `engram` — ranks 1–9 are now generated; Embedding & Vector KNN covers the sqlite-vec extension integration with no existing documentation.
+All topics generated. Run `dev:repo-doc engram` to refresh the overview and doc-plan when significant new features land.
 
 ---
 _Generated: 2026-04-06T00:00:00Z | Commit: a9c034d6_
