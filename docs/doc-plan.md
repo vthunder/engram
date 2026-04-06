@@ -12,7 +12,7 @@ Topics span modules — signals are the max across constituent modules.
 | 5 | Schema Induction & Forward Matching | 0.82 | `internal/schema`, `internal/consolidate`, `internal/graph` | centrality 24, no doc, 7 schema commits + 30 graph, 4+17 fix-commits | generated |
 | 6 | Pyramid Compression | 0.78 | `internal/graph`, `internal/consolidate` | centrality 24, no doc, compress_queue high churn, 17 fix-commits | generated |
 | 7 | Multi-Database Architecture | 0.76 | `internal/graph`, `config`, `cmd/engram` | centrality 24, no doc, 3-DB split is non-obvious runtime constraint; (foundational) | generated |
-| 8 | MCP Tool Dispatch | 0.73 | `internal/mcp`, `internal/graph` | centrality 24 (via graph), no doc, 5 commits, stdio transport pattern | missing |
+| 8 | MCP Tool Dispatch | 0.73 | `internal/mcp`, `internal/graph` | centrality 24 (via graph), no doc, 5 commits, stdio transport pattern | generated |
 | 9 | Conversation Context Buffer | 0.67 | `internal/api`, `internal/graph` | centrality 24, no doc, channel-based pagination + compression levels | missing |
 | 10 | Embedding & Vector KNN | 0.63 | `internal/embed`, `internal/graph` | centrality 24, no doc, sqlite-vec extension integration | missing |
 
