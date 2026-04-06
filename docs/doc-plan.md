@@ -10,15 +10,15 @@ Topics span modules — signals are the max across constituent modules.
 | 3 | Episode Ingestion & NER Pipeline | 0.91 | `internal/api`, `internal/ner`, `internal/graph` | centrality 24, no doc, 37 commits/90d (API highest churn), 17 fix-commits. Source: `id-design.md` | generated |
 | 4 | Engram Decay & Activation Mechanics | 0.88 | `internal/graph`, `cmd/engram` | centrality 24, no doc, 30 commits, 17 fix-commits; (foundational) | generated |
 | 5 | Schema Induction & Forward Matching | 0.82 | `internal/schema`, `internal/consolidate`, `internal/graph` | centrality 24, no doc, 7 schema commits + 30 graph, 4+17 fix-commits | generated |
-| 6 | Pyramid Compression | 0.78 | `internal/graph`, `internal/consolidate` | centrality 24, no doc, compress_queue high churn, 17 fix-commits | missing |
-| 7 | Multi-Database Architecture | 0.76 | `internal/graph`, `config`, `cmd/engram` | centrality 24, no doc, 3-DB split is non-obvious runtime constraint; (foundational) | missing |
+| 6 | Pyramid Compression | 0.78 | `internal/graph`, `internal/consolidate` | centrality 24, no doc, compress_queue high churn, 17 fix-commits | generated |
+| 7 | Multi-Database Architecture | 0.76 | `internal/graph`, `config`, `cmd/engram` | centrality 24, no doc, 3-DB split is non-obvious runtime constraint; (foundational) | generated |
 | 8 | MCP Tool Dispatch | 0.73 | `internal/mcp`, `internal/graph` | centrality 24 (via graph), no doc, 5 commits, stdio transport pattern | missing |
 | 9 | Conversation Context Buffer | 0.67 | `internal/api`, `internal/graph` | centrality 24, no doc, channel-based pagination + compression levels | missing |
 | 10 | Embedding & Vector KNN | 0.63 | `internal/embed`, `internal/graph` | centrality 24, no doc, sqlite-vec extension integration | missing |
 
 ## Recommended next
 
-Run `dev:arch-doc "Pyramid Compression"` on `engram` — ranks 1–5 are now generated; Pyramid Compression covers the compress_queue and multi-level summary generation with no existing documentation.
+Run `dev:arch-doc "MCP Tool Dispatch"` on `engram` — ranks 1–7 are now generated; MCP Tool Dispatch covers the stdio transport pattern and graph operation mapping with no existing documentation.
 
 ---
 _Generated: 2026-04-06T00:00:00Z | Commit: a9c034d6_
