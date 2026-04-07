@@ -1,12 +1,12 @@
 ---
-generated_at: 2026-04-06T00:00:00Z
-commit: a9c034d6
+generated_at: 2026-04-07T16:10:00Z
+commit: 505f8d70
 repomix: available
 ---
 
 # Engram — Overview
 
-> Generated: 2026-04-06 | Commit: a9c034d6
+> Generated: 2026-04-07 | Commit: 505f8d70
 
 ## Purpose
 
@@ -20,7 +20,7 @@ Engram is an episodic memory service for AI agents — a sidecar that ingests ra
 
 **Decay (background, every hour):** `runDecay` in `cmd/engram/main.go` applies exponential decay to engram activation levels. Access slows decay; reinforcement reverses it.
 
-**Retrieval:** `/v1/engrams/search` seeds a spreading activation process in `internal/graph` from three parallel signals — vector KNN (sqlite-vec), lexical BM25 (FTS5), and entity-matched lookup — then propagates activation through the engram graph via typed edges, applies lateral inhibition, and returns the highest-activation memories. If confidence is too low, the service returns empty rather than confabulating.
+**Retrieval:** `/v1/engrams/search` seeds a spreading activation process in `internal/graph` from three parallel signals — vector KNN (sqlite-vec via qualified `vectors.engram_vec` in post-v31 mode, or unqualified in pre-v31 mode), lexical BM25 (FTS5), and entity-matched lookup — then propagates activation through the engram graph via typed edges, applies lateral inhibition, and returns the highest-activation memories. If confidence is too low, the service returns empty rather than confabulating.
 
 **Pyramid compression:** Each engram has five pre-computed summaries (4, 8, 16, 32, 64 words) stored in `memory-cache.db`. Callers specify a compression level to control token budget.
 
@@ -57,7 +57,7 @@ Engram is an episodic memory service for AI agents — a sidecar that ingests ra
 - **Testing**: Go standard `testing` package; integration tests use a real SQLite in-memory DB (e.g. `consolidate_integration_test.go`, `graph_test.go`). No mocks for the database layer.
 - **Naming**: Go idioms throughout; package names match directory names. MCP package aliased as `engrammcp`, schema as `engramschema` to avoid collision with stdlib.
 - **Build**: Use `make build` — plain `go build` breaks FTS5 full-text search (CGO flags required for sqlite3).
-- **Multi-DB**: Three SQLite files — `memory.db` (main data, committed), `memory-vectors.db` (embeddings, gitignored, recomputable), `memory-cache.db` (pyramids, gitignored, recomputable).
+- **Multi-DB**: Three SQLite files — `memory.db` (main data, committed), `memory-vectors.db` (embeddings, gitignored, recomputable), `memory-cache.db` (pyramids, gitignored, recomputable). Post-v31: `Open()` takes explicit `VectorsPath`/`CachePath`; `embeddingInMain` flag in `engrams.go` and `activation.go` provides backward compat for pre-v31 databases where embeddings were stored in the main DB.
 - **LLM providers**: Anthropic, `claude-code` (CLI delegate), and Ollama are all supported; resolved per-function via config (`compression_llm`, `consolidation_llm`, `inference_llm`).
 - **Entry points**: REST via chi router (`internal/api/router.go`); MCP via stdio (`internal/mcp/server.go`); both served from `cmd/engram/main.go`.
 

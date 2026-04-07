@@ -1,4 +1,4 @@
-# Doc Plan: engram — 2026-04-06
+# Doc Plan: engram — 2026-04-07
 
 Scoring: centrality (0.30) + coverage gap (0.30) + complexity (0.20) + churn (0.10) + bug density (0.10)
 Topics span modules — signals are the max across constituent modules.
@@ -21,4 +21,4 @@ Topics span modules — signals are the max across constituent modules.
 All topics generated. Run `dev:repo-doc engram` to refresh the overview and doc-plan when significant new features land.
 
 ---
-_Generated: 2026-04-06T00:00:00Z | Commit: a9c034d6_
+_Generated: 2026-04-07T16:10:00Z | Commit: 505f8d70_
