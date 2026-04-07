@@ -19,11 +19,6 @@ func (g *DB) AddEngram(en *Engram) error {
 		return fmt.Errorf("engram ID is required")
 	}
 
-	embeddingBytes, err := json.Marshal(en.Embedding)
-	if err != nil {
-		embeddingBytes = nil
-	}
-
 	if en.CreatedAt.IsZero() {
 		en.CreatedAt = time.Now()
 	}
@@ -36,23 +31,54 @@ func (g *DB) AddEngram(en *Engram) error {
 		engramType = EngramTypeKnowledge
 	}
 
-	_, err = g.db.Exec(`
-		INSERT INTO engrams (id, topic, engram_type, activation, strength,
-			embedding, event_time, created_at, last_accessed, labile_until, depth)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			engram_type = excluded.engram_type,
-			activation = excluded.activation,
-			strength = excluded.strength,
-			embedding = excluded.embedding,
-			event_time = excluded.event_time,
-			last_accessed = excluded.last_accessed,
-			labile_until = excluded.labile_until,
-			depth = excluded.depth
-	`,
-		en.ID, en.Topic, string(engramType), en.Activation, en.Strength,
-		embeddingBytes, en.EventTime, en.CreatedAt, en.LastAccessed, nullableTime(en.LabileUntil), en.Depth,
-	)
+	var err error
+	if g.embeddingInMain {
+		// Pre-v31: embedding column still exists in main.engrams
+		embeddingBytes, _ := json.Marshal(en.Embedding)
+		_, err = g.db.Exec(`
+			INSERT INTO engrams (id, topic, engram_type, activation, strength,
+				embedding, event_time, created_at, last_accessed, labile_until, depth)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				engram_type = excluded.engram_type,
+				activation = excluded.activation,
+				strength = excluded.strength,
+				embedding = excluded.embedding,
+				event_time = excluded.event_time,
+				last_accessed = excluded.last_accessed,
+				labile_until = excluded.labile_until,
+				depth = excluded.depth
+		`,
+			en.ID, en.Topic, string(engramType), en.Activation, en.Strength,
+			embeddingBytes, en.EventTime, en.CreatedAt, en.LastAccessed, nullableTime(en.LabileUntil), en.Depth,
+		)
+	} else {
+		// Post-v31: embedding column dropped from main.engrams; store in vectors DB separately
+		_, err = g.db.Exec(`
+			INSERT INTO engrams (id, topic, engram_type, activation, strength,
+				event_time, created_at, last_accessed, labile_until, depth)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				engram_type = excluded.engram_type,
+				activation = excluded.activation,
+				strength = excluded.strength,
+				event_time = excluded.event_time,
+				last_accessed = excluded.last_accessed,
+				labile_until = excluded.labile_until,
+				depth = excluded.depth
+		`,
+			en.ID, en.Topic, string(engramType), en.Activation, en.Strength,
+			en.EventTime, en.CreatedAt, en.LastAccessed, nullableTime(en.LabileUntil), en.Depth,
+		)
+		// Store embedding in vectors DB
+		if len(en.Embedding) > 0 && g.vectors != nil {
+			embeddingBytes, _ := json.Marshal(en.Embedding)
+			g.vectors.Exec(`
+				INSERT INTO engram_embeddings (id, embedding) VALUES (?, ?)
+				ON CONFLICT(id) DO UPDATE SET embedding = excluded.embedding
+			`, en.ID, embeddingBytes)
+		}
+	}
 
 	if err != nil {
 		return fmt.Errorf("failed to insert engram: %w", err)
@@ -288,15 +314,29 @@ func (g *DB) ReinforceEngram(id string, newEmbedding []float64, alpha float64) e
 		engram.Embedding = newEmbedding
 	}
 
-	embeddingBytes, _ := json.Marshal(engram.Embedding)
-
-	_, err = g.db.Exec(`
-		UPDATE engrams SET
-			strength = strength + 1,
-			embedding = ?,
-			last_accessed = ?
-		WHERE id = ?
-	`, embeddingBytes, time.Now(), id)
+	if g.embeddingInMain {
+		// Pre-v31: update embedding in main.engrams
+		embeddingBytes, _ := json.Marshal(engram.Embedding)
+		_, err = g.db.Exec(`
+			UPDATE engrams SET
+				strength = strength + 1,
+				embedding = ?,
+				last_accessed = ?
+			WHERE id = ?
+		`, embeddingBytes, time.Now(), id)
+	} else {
+		// Post-v31: update strength in main, embedding in vectors DB
+		_, err = g.db.Exec(`
+			UPDATE engrams SET strength = strength + 1, last_accessed = ? WHERE id = ?
+		`, time.Now(), id)
+		if err == nil && len(engram.Embedding) > 0 && g.vectors != nil {
+			embeddingBytes, _ := json.Marshal(engram.Embedding)
+			g.vectors.Exec(`
+				INSERT INTO engram_embeddings (id, embedding) VALUES (?, ?)
+				ON CONFLICT(id) DO UPDATE SET embedding = excluded.embedding
+			`, id, embeddingBytes)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -727,7 +767,7 @@ func (g *DB) DeleteEngram(id string) error {
 	g.db.Exec(`DELETE FROM engram_entities WHERE engram_id = ?`, id)
 	g.db.Exec(`DELETE FROM engram_episodes WHERE engram_id = ?`, id)
 	if g.vecAvailable {
-		g.db.Exec(`DELETE FROM engram_vec WHERE rowid = (SELECT rowid FROM engrams WHERE id = ?)`, id)
+		g.db.Exec(`DELETE FROM vectors.engram_vec WHERE rowid = (SELECT rowid FROM engrams WHERE id = ?)`, id)
 	}
 
 	result, err := g.db.Exec(`DELETE FROM engrams WHERE id = ?`, id)
@@ -1057,6 +1097,7 @@ func (g *DB) UpdateEngram(engramID, summary string, embedding []float64, engramT
 }
 
 // syncEngramToVec inserts or replaces an engram in the vec0 index.
+// The vec table lives in the vectors attached schema (vectors.engram_vec).
 func (g *DB) syncEngramToVec(engramID string, embedding []float64) {
 	emb32 := normalizeFloat32(float64ToFloat32(embedding))
 	serialized, serErr := sqlite_vec.SerializeFloat32(emb32)
@@ -1070,11 +1111,15 @@ func (g *DB) syncEngramToVec(engramID string, embedding []float64) {
 		return
 	}
 
-	g.db.Exec(`DELETE FROM engram_vec WHERE rowid = ?`, rowid)
-	g.db.Exec(`INSERT INTO engram_vec(rowid, embedding, engram_id) VALUES (?, ?, ?)`, rowid, serialized, engramID)
+	g.db.Exec(`DELETE FROM vectors.engram_vec WHERE rowid = ?`, rowid)
+	g.db.Exec(`INSERT INTO vectors.engram_vec(rowid, embedding, engram_id) VALUES (?, ?, ?)`, rowid, serialized, engramID)
 }
 
-// AddEngramSummary stores a compression-level summary for an engram
+// AddEngramSummary stores a compression-level summary for an engram.
+// After v31, engram_summaries lives in the cache attached schema; g.db resolves
+// the unqualified name to cache.engram_summaries automatically.
+// For level 32, we also manually sync to main.engram_fts (the FTS triggers were
+// dropped in v31 when engram_summaries moved out of main).
 func (g *DB) AddEngramSummary(engramID string, level int, summary string, tokens int) error {
 	_, err := g.db.Exec(`
 		INSERT INTO engram_summaries (engram_id, compression_level, summary, tokens)
@@ -1083,5 +1128,20 @@ func (g *DB) AddEngramSummary(engramID string, level int, summary string, tokens
 			summary = excluded.summary,
 			tokens = excluded.tokens
 	`, engramID, level, summary, tokens)
-	return err
+	if err != nil {
+		return err
+	}
+	// Manually sync level-32 summaries to engram_fts (application-level trigger).
+	// This replaces the DB-side trigger that was dropped in v31.
+	if level == CompressionLevel32 {
+		var rowid int64
+		if scanErr := g.db.QueryRow(
+			`SELECT id FROM cache.engram_summaries WHERE engram_id = ? AND compression_level = 32 LIMIT 1`,
+			engramID,
+		).Scan(&rowid); scanErr == nil {
+			g.db.Exec(`INSERT OR REPLACE INTO engram_fts(rowid, engram_id, summary) VALUES (?, ?, ?)`,
+				rowid, engramID, summary)
+		}
+	}
+	return nil
 }

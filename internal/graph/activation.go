@@ -484,9 +484,10 @@ func (g *DB) findSimilarEngramsVec(queryEmb []float64, topK int) ([]string, erro
 	maxL2Distance := cosineDistToL2(1.0 - MinSimilarityThreshold)
 
 	// Fetch topK*3 candidates then apply threshold filter.
+	// engram_vec lives in the vectors attached schema (vectors.engram_vec).
 	rows, err := g.db.Query(`
 		SELECT engram_id, distance
-		FROM engram_vec
+		FROM vectors.engram_vec
 		WHERE embedding MATCH ?
 		  AND k = ?
 		ORDER BY distance ASC
@@ -516,7 +517,16 @@ func (g *DB) findSimilarEngramsVec(queryEmb []float64, topK int) ([]string, erro
 
 // findSimilarEngramsScan is the O(n) fallback used when sqlite-vec is unavailable.
 func (g *DB) findSimilarEngramsScan(queryEmb []float64, topK int) ([]string, error) {
-	rows, err := g.db.Query(`SELECT id, embedding FROM engrams WHERE embedding IS NOT NULL`)
+	// Post-v31: embeddings live in vectors.engram_embeddings; pre-v31: in main engrams.embedding.
+	vectorsDB := g.vectors
+	var query string
+	if vectorsDB != nil && !g.embeddingInMain {
+		query = `SELECT id, embedding FROM engram_embeddings WHERE embedding IS NOT NULL`
+	} else {
+		vectorsDB = g.db
+		query = `SELECT id, embedding FROM engrams WHERE embedding IS NOT NULL`
+	}
+	rows, err := vectorsDB.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -584,9 +594,10 @@ func (g *DB) findSimilarEngramsAboveThresholdVec(queryEmb []float64, threshold f
 	// Convert cosine threshold to L2 distance threshold for normalized vectors
 	maxL2Distance := cosineDistToL2(1.0 - threshold)
 
+	// engram_vec lives in the vectors attached schema (vectors.engram_vec).
 	rows, err := g.db.Query(`
 		SELECT engram_id, distance
-		FROM engram_vec
+		FROM vectors.engram_vec
 		WHERE embedding MATCH ?
 		  AND k = 200
 		ORDER BY distance ASC
@@ -616,7 +627,17 @@ func (g *DB) findSimilarEngramsAboveThresholdVec(queryEmb []float64, threshold f
 
 // findSimilarEngramsAboveThresholdScan is the O(n) fallback.
 func (g *DB) findSimilarEngramsAboveThresholdScan(queryEmb []float64, threshold float64, excludeID string) ([]SimilarEngram, error) {
-	rows, err := g.db.Query(`SELECT id, embedding FROM engrams WHERE embedding IS NOT NULL AND id != ?`, excludeID)
+	var rows interface {
+		Next() bool
+		Scan(...interface{}) error
+		Close() error
+	}
+	var err error
+	if g.vectors != nil && !g.embeddingInMain {
+		rows, err = g.vectors.Query(`SELECT id, embedding FROM engram_embeddings WHERE embedding IS NOT NULL AND id != ?`, excludeID)
+	} else {
+		rows, err = g.db.Query(`SELECT id, embedding FROM engrams WHERE embedding IS NOT NULL AND id != ?`, excludeID)
+	}
 	if err != nil {
 		return nil, err
 	}

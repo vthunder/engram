@@ -44,7 +44,9 @@ type ServerConfig struct {
 }
 
 type StorageConfig struct {
-	Path string `yaml:"path"`
+	Path        string `yaml:"path"`
+	VectorsPath string `yaml:"vectors_path"`
+	CachePath   string `yaml:"cache_path"`
 }
 
 type LLMConfig struct {

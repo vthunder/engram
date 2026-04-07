@@ -58,8 +58,8 @@ func main() {
 		"inference_llm", infer.Provider+"/"+infer.Model,
 	)
 
-	// Open graph database
-	db, err := graph.Open(cfg.Storage.Path)
+	// Open graph database (multi-DB split: main, vectors, cache)
+	db, err := graph.Open(cfg.Storage.Path, cfg.Storage.VectorsPath, cfg.Storage.CachePath)
 	if err != nil {
 		logger.Error("failed to open database", "err", err)
 		os.Exit(1)
