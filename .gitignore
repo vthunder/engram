@@ -3,3 +3,4 @@
 *.db-shm
 engram.yaml
 /engram
+bin/
