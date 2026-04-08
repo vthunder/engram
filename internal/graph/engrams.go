@@ -118,7 +118,7 @@ func (g *DB) GetEngram(id string) (*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			e.activation, e.quality, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
 			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.id = ?
@@ -141,11 +141,11 @@ func (g *DB) GetActivatedEngrams(threshold float64, limit int) ([]*Engram, error
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			e.activation, e.quality, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
 			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.activation >= ?
-		ORDER BY e.activation DESC
+		ORDER BY e.activation * e.quality DESC
 		LIMIT ?
 	`, threshold, limit)
 	if err != nil {
@@ -188,7 +188,7 @@ func (g *DB) GetEngramsBatch(ids []string) (map[string]*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			e.activation, e.quality, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
 			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.id IN (`+string(placeholders)+`)
@@ -238,7 +238,7 @@ func (g *DB) GetEngramsBatchAtLevel(ids []string, level int) (map[string]*Engram
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			e.activation, e.quality, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
 			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.id IN (`+string(placeholders)+`)
@@ -271,11 +271,11 @@ func (g *DB) GetActivatedEngramsWithLevel(threshold float64, limit, level int) (
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			e.activation, e.quality, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
 			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE e.activation >= ?
-		ORDER BY e.activation DESC
+		ORDER BY e.activation * e.quality DESC
 		LIMIT ?
 	`, level, threshold, limit)
 	if err != nil {
@@ -748,7 +748,7 @@ func (g *DB) GetAllEngrams() ([]*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			e.activation, e.quality, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
 			COALESCE(e.depth, 0)
 		FROM engrams e
 		ORDER BY e.created_at DESC
@@ -857,6 +857,58 @@ func (g *DB) GetDBStats() (*DBStats, error) {
 	return stats, nil
 }
 
+// RateEngrams updates quality scores for engrams using EMA.
+// ratings maps engram ID (or 5-char prefix) to a raw rating 1–5.
+// EMA formula: new_quality = 0.3 * normalized + 0.7 * current_quality
+// where normalized maps 1→0.0, 2→0.25, 3→0.5, 4→0.75, 5→1.0
+func (g *DB) RateEngrams(ratings map[string]int) error {
+	for rawID, rawRating := range ratings {
+		// Clamp rating to valid range
+		rating := rawRating
+		if rating < 1 {
+			rating = 1
+		}
+		if rating > 5 {
+			rating = 5
+		}
+
+		// Normalize 1–5 → 0.0–1.0
+		normalized := float64(rating-1) / 4.0
+
+		// Resolve prefix to full ID if the ID looks like a prefix (< 32 chars)
+		id := rawID
+		if len(rawID) < 32 {
+			var fullID string
+			err := g.db.QueryRow(
+				`SELECT id FROM engrams WHERE id LIKE ?||'%' LIMIT 1`, rawID,
+			).Scan(&fullID)
+			if err != nil {
+				// No matching engram found — skip
+				continue
+			}
+			id = fullID
+		}
+
+		// Read current quality
+		var currentQuality float64
+		if err := g.db.QueryRow(`SELECT quality FROM engrams WHERE id = ?`, id).Scan(&currentQuality); err != nil {
+			// Engram not found — skip
+			continue
+		}
+
+		// Apply EMA: new_quality = 0.3 * normalized + 0.7 * current_quality
+		newQuality := 0.3*normalized + 0.7*currentQuality
+
+		if _, err := g.db.Exec(
+			`UPDATE engrams SET quality = ?, quality_ratings = quality_ratings + 1 WHERE id = ?`,
+			newQuality, id,
+		); err != nil {
+			log.Printf("[graph] RateEngrams: failed to update engram %s: %v", id, err)
+		}
+	}
+	return nil
+}
+
 // scanEngram scans a single row into an Engram
 func scanEngram(row *sql.Row) (*Engram, error) {
 	var en Engram
@@ -868,7 +920,7 @@ func scanEngram(row *sql.Row) (*Engram, error) {
 	var labileUntil sql.NullTime
 
 	err := row.Scan(
-		&en.ID, &summary, &topic, &engramType, &en.Activation, &en.Strength,
+		&en.ID, &summary, &topic, &engramType, &en.Activation, &en.Quality, &en.Strength,
 		&embeddingBytes, &eventTime, &en.CreatedAt, &en.LastAccessed, &labileUntil,
 		&en.Depth,
 	)
@@ -912,7 +964,7 @@ func scanEngramRows(rows *sql.Rows) ([]*Engram, error) {
 		var labileUntil sql.NullTime
 
 		err := rows.Scan(
-			&en.ID, &summary, &topic, &engramType, &en.Activation, &en.Strength,
+			&en.ID, &summary, &topic, &engramType, &en.Activation, &en.Quality, &en.Strength,
 			&embeddingBytes, &eventTime, &en.CreatedAt, &en.LastAccessed, &labileUntil,
 			&en.Depth,
 		)
@@ -958,7 +1010,7 @@ func (g *DB) GetUngroupedEngrams(depth int) ([]*Engram, error) {
 				''
 			) as summary,
 			e.topic, e.engram_type,
-			e.activation, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
+			e.activation, e.quality, e.strength, e.embedding, e.event_time, e.created_at, e.last_accessed, e.labile_until,
 			COALESCE(e.depth, 0)
 		FROM engrams e
 		WHERE COALESCE(e.depth, 0) = ?

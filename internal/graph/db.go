@@ -1300,6 +1300,23 @@ func (g *DB) runMigrations() error {
 		log.Println("[graph] Migration to v31 completed: multi-DB split")
 	}
 
+	// v32: Add quality score columns for executive memory feedback loop.
+	// quality: EMA score (0–1), default 0.5 (neutral). Multiplied by activation for ranking.
+	// quality_ratings: count of times this engram has been rated; tracks signal volume.
+	if version < 32 {
+		stmts := []string{
+			`ALTER TABLE engrams ADD COLUMN quality REAL NOT NULL DEFAULT 0.5`,
+			`ALTER TABLE engrams ADD COLUMN quality_ratings INT NOT NULL DEFAULT 0`,
+			`CREATE INDEX IF NOT EXISTS idx_engrams_quality ON engrams(quality)`,
+		}
+		for _, sql := range stmts {
+			// Ignore errors for columns that already exist
+			g.db.Exec(sql)
+		}
+		g.db.Exec("INSERT INTO schema_version (version) VALUES (32)")
+		log.Println("[graph] Migration to v32 completed: quality + quality_ratings columns added")
+	}
+
 	return nil
 }
 

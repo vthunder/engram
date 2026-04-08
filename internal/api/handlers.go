@@ -1195,6 +1195,31 @@ func (s *Services) handleBoostEngrams(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+type rateEngramsRequest struct {
+	Ratings map[string]int `json:"ratings"`
+}
+
+// handleRateEngrams updates quality scores for engrams from executive ratings.
+// POST /v1/engrams/rate
+// Request: {"ratings": {"engram_id_or_prefix": 1-5, ...}}
+// Response: {"ok": true}
+func (s *Services) handleRateEngrams(w http.ResponseWriter, r *http.Request) {
+	var req rateEngramsRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(req.Ratings) == 0 {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	if err := s.Graph.RateEngrams(req.Ratings); err != nil {
+		writeError(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // --- Management ---
 
 // handleRegenerateEngramPyramids regenerates stored pyramid summaries (L4–L64) for all

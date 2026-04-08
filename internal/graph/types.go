@@ -140,6 +140,7 @@ type Engram struct {
 	Topic      string     `json:"topic,omitempty"`
 	EngramType EngramType `json:"engram_type,omitempty"`
 	Activation  float64    `json:"activation"`
+	Quality     float64    `json:"quality"`
 	AccessCount int        `json:"access_count"`
 	Strength    int        `json:"strength"`
 	Embedding  []float64  `json:"embedding,omitempty"`

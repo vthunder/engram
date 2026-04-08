@@ -795,9 +795,13 @@ func (g *DB) Retrieve(queryEmb []float64, queryText string, limit int, extraSeed
 		result.Engrams = append(result.Engrams, trace)
 	}
 
-	// Re-sort after applying operational bias (may reorder results)
+	// Re-sort after applying operational bias and quality weighting.
+	// Score = activation * quality so high-quality memories outrank low-quality
+	// ones even at similar activation. Quality defaults to 0.5 for unrated engrams.
 	sort.Slice(result.Engrams, func(i, j int) bool {
-		return result.Engrams[i].Activation > result.Engrams[j].Activation
+		scoreI := result.Engrams[i].Activation * result.Engrams[i].Quality
+		scoreJ := result.Engrams[j].Activation * result.Engrams[j].Quality
+		return scoreI > scoreJ
 	})
 
 	return result, nil
@@ -984,9 +988,11 @@ func (g *DB) RetrieveWithContext(queryEmb []float64, queryText string, contextTr
 		result.Engrams = append(result.Engrams, trace)
 	}
 
-	// Re-sort after applying operational bias (may reorder results)
+	// Re-sort after applying operational bias and quality weighting.
 	sort.Slice(result.Engrams, func(i, j int) bool {
-		return result.Engrams[i].Activation > result.Engrams[j].Activation
+		scoreI := result.Engrams[i].Activation * result.Engrams[i].Quality
+		scoreJ := result.Engrams[j].Activation * result.Engrams[j].Quality
+		return scoreI > scoreJ
 	})
 
 	return result, nil

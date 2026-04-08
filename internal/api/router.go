@@ -37,6 +37,7 @@ func NewRouter(svc *Services, apiKey string) *chi.Mux {
 		r.Post("/v1/engrams/{id}/reinforce", svc.handleReinforceEngram)
 		r.Post("/v1/engrams/{id}/regenerate-pyramid", svc.handleRegenerateEngramPyramid)
 		r.Post("/v1/engrams/boost", svc.handleBoostEngrams)
+		r.Post("/v1/engrams/rate", svc.handleRateEngrams)
 		r.Post("/v1/engrams/regenerate-pyramids", svc.handleRegenerateEngramPyramids)
 
 		// Episodes
