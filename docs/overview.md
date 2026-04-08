@@ -1,12 +1,12 @@
 ---
-generated_at: 2026-04-07T16:10:00Z
-commit: 505f8d70
+generated_at: 2026-04-09T00:00:00Z
+commit: 03811fe5
 repomix: available
 ---
 
 # Engram — Overview
 
-> Generated: 2026-04-07 | Commit: 505f8d70
+> Generated: 2026-04-09 | Commit: 03811fe5
 
 ## Purpose
 
@@ -20,7 +20,9 @@ Engram is an episodic memory service for AI agents — a sidecar that ingests ra
 
 **Decay (background, every hour):** `runDecay` in `cmd/engram/main.go` applies exponential decay to engram activation levels. Access slows decay; reinforcement reverses it.
 
-**Retrieval:** `/v1/engrams/search` seeds a spreading activation process in `internal/graph` from three parallel signals — vector KNN (sqlite-vec via qualified `vectors.engram_vec` in post-v31 mode, or unqualified in pre-v31 mode), lexical BM25 (FTS5), and entity-matched lookup — then propagates activation through the engram graph via typed edges, applies lateral inhibition, and returns the highest-activation memories. If confidence is too low, the service returns empty rather than confabulating.
+**Retrieval:** `/v1/engrams/search` seeds a spreading activation process in `internal/graph` from three parallel signals — vector KNN (sqlite-vec via qualified `vectors.engram_vec` in post-v31 mode, or unqualified in pre-v31 mode), lexical BM25 (FTS5), and entity-matched lookup — then propagates activation through the engram graph via typed edges, applies lateral inhibition, and returns the highest-activation memories. Results are ranked by `activation * quality` (not raw activation alone) so that engrams rated highly by the executive surface above equally-activated but unproven memories. If confidence is too low, the service returns empty rather than confabulating.
+
+**Quality feedback loop (v32+):** Callers send ratings 1–5 per engram via `POST /v1/engrams/rate`. The handler updates each engram's `quality` column using an EMA (`new_quality = 0.3 * normalized + 0.7 * current_quality`), where a rating of 3 maps to 0.5 (neutral), 5 maps to 1.0. Unrated engrams default to 0.5. `quality_ratings` tracks how many ratings a memory has accumulated. Both `Retrieve` and `RetrieveWithContext` in `internal/graph/activation.go` apply the quality weight at the final re-sort step.
 
 **Pyramid compression:** Each engram has five pre-computed summaries (4, 8, 16, 32, 64 words) stored in `memory-cache.db`. Callers specify a compression level to control token budget.
 
@@ -30,7 +32,7 @@ Engram is an episodic memory service for AI agents — a sidecar that ingests ra
 |------|----------------|
 | `cmd/engram/` | Entry point — wires all components, starts background goroutines (consolidation, decay), serves REST + optional MCP |
 | `config/` | Config struct and YAML loading; resolves per-LLM overrides and env var precedence |
-| `internal/graph/` | Core data layer — SQLite schema, CRUD for episodes/engrams/entities/schemas, spreading activation retrieval, pyramid compression queue, ID generation |
+| `internal/graph/` | Core data layer — SQLite schema, CRUD for episodes/engrams/entities/schemas, spreading activation retrieval, pyramid compression queue, ID generation, quality EMA scoring |
 | `internal/api/` | HTTP handlers (chi router) — all REST endpoints, auth middleware, request/response types |
 | `internal/consolidate/` | LLM-driven consolidation — episode clustering, engram summarization, recursive L2/L3 compression, Anthropic/claude-code/Ollama clients |
 | `internal/embed/` | Embedding client — Ollama-backed text embedding; also used as the Ollama LLM adapter |
@@ -44,10 +46,10 @@ Engram is an episodic memory service for AI agents — a sidecar that ingests ra
 ## Key Files
 
 - `cmd/engram/main.go` — startup wiring, background goroutine launch, component composition
-- `internal/graph/db.go` — DB open/init, multi-database setup (main, vectors, cache)
+- `internal/graph/db.go` — DB open/init, multi-database setup (main, vectors, cache), schema migrations
 - `internal/graph/types.go` — core data types: Engram, Episode, Entity, Schema
-- `internal/graph/engrams.go` — engram CRUD and spreading activation retrieval
-- `internal/graph/activation.go` — spreading activation algorithm implementation
+- `internal/graph/engrams.go` — engram CRUD, quality EMA updates (`RateEngrams`), and ranked queries
+- `internal/graph/activation.go` — spreading activation algorithm; quality-weighted final sort
 - `internal/consolidate/consolidate.go` — consolidation pipeline: clustering, LLM summarization, engram write
 - `internal/api/router.go` — route registration; entry point for understanding the API surface
 - `config/config.go` — all config keys; start here to understand LLM provider resolution
@@ -65,7 +67,8 @@ Engram is an episodic memory service for AI agents — a sidecar that ingests ra
 
 For a given task type, start at:
 - **Adding a new API endpoint**: `internal/api/router.go` — register route, then `internal/api/handlers.go` for handler pattern
-- **Changing retrieval behavior**: `internal/graph/activation.go` — spreading activation; `internal/graph/engrams.go` for the search entry point
+- **Changing retrieval behavior**: `internal/graph/activation.go` — spreading activation and quality-weighted sort; `internal/graph/engrams.go` for the search entry point
+- **Implementing quality/rating features**: `internal/graph/engrams.go` (`RateEngrams`) — EMA update logic; `internal/api/handlers.go` (`handleRateEngrams`) for the API handler
 - **Modifying consolidation logic**: `internal/consolidate/consolidate.go` — main pipeline; `internal/consolidate/claude_inference.go` for LLM prompts
 - **Understanding the data model**: `internal/graph/types.go` — core structs; `internal/graph/schemas.go` — SQLite schema DDL
 - **Adding an MCP tool**: `internal/mcp/server.go` — tool registration and dispatch
